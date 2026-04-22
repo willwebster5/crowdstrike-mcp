@@ -30,6 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9.0.0", "ruff>=0.8.0"]
+prefab-pilot = ["fastmcp[apps]>=3.2"]
 
 [project.scripts]
 crowdstrike-mcp = "crowdstrike_mcp.server:main"
