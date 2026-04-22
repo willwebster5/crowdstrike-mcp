@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from crowdstrike_mcp.prefab_pilot.mock_data import generate_process_events
-from crowdstrike_mcp.prefab_pilot.summary import QuerySummary, summarize_events
+from crowdstrike_mcp.prefab_pilot.summary import summarize_events
 
 
 def test_summarize_events_reports_total_count():

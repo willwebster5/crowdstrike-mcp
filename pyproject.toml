@@ -34,6 +34,7 @@ prefab-pilot = ["fastmcp[apps]>=3.2"]
 
 [project.scripts]
 crowdstrike-mcp = "crowdstrike_mcp.server:main"
+crowdstrike-prefab-pilot = "crowdstrike_mcp.prefab_pilot.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crowdstrike_mcp"]
