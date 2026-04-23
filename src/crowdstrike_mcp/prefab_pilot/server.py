@@ -150,7 +150,7 @@ def ngsiem_query_demo(
 
     return ToolResult(
         content=[TextContent(type="text", text=text)],
-        structured_content=layout.to_json(),
+        structured_content=layout,
     )
 
 

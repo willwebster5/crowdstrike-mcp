@@ -52,11 +52,17 @@ async def test_ngsiem_query_demo_text_fallback_is_self_contained():
 
 
 @pytest.mark.anyio
-async def test_ngsiem_query_demo_structured_content_is_a_column():
+async def test_ngsiem_query_demo_structured_content_is_a_prefab_envelope():
+    # The renderer hangs on "waiting for content" if we ship a bare component
+    # tree. FastMCP wraps a Prefab Component into a PrefabApp envelope
+    # (``$prefab``/``view``) when the Component is passed to ToolResult.
     tools = await app.list_tools()
     tool = next(t for t in tools if t.name == "ngsiem_query_demo")
     result = await tool.run(arguments={"count": 10, "query": "q"})
-    assert result.structured_content["type"] == "Column"
+    sc = result.structured_content
+    assert "$prefab" in sc, f"missing PrefabApp envelope: {list(sc.keys())}"
+    assert "view" in sc
+    assert sc["view"].get("type") in ("Div", "Column"), sc["view"].get("type")
 
 
 @pytest.mark.anyio
@@ -177,7 +183,8 @@ async def test_ngsiem_query_demo_handles_live_int_epoch_timestamps(monkeypatch):
     tool = next(t for t in tools if t.name == "ngsiem_query_demo")
     result = await tool.run(arguments={"query": "*"})
     assert result.structured_content
-    assert result.structured_content["type"] == "Column"
+    assert "$prefab" in result.structured_content
+    assert "view" in result.structured_content
 
 
 @pytest.mark.anyio
