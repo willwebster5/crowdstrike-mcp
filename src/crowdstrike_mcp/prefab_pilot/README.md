@@ -21,16 +21,19 @@ A standalone stdio MCP server that exposes two tools:
 - `ngsiem_query_drilldown` — an `@app.tool()` the UI calls when a row is
   clicked. Returns the full JSON for a single event.
 
-The pilot has **two execution paths**, gated on `FALCON_CLIENT_ID`:
+The pilot has **two execution paths**, gated on `CROWDSTRIKE_PREFAB_LIVE`:
 
-- **Live** — when `FALCON_CLIENT_ID` is set, `ngsiem_query_demo` executes
-  `query` against the `search-all` repository via `NGSIEMModule._execute_query`.
-  The `start_time` and `max_results` parameters flow through.
-- **Mock** — when the env var is absent, or when the live call raises / returns
-  `success: False`, the tool falls back to `mock_data.generate_process_events`
-  so the pilot still renders. The text content explicitly reports which source
-  produced the events (`Source: live` vs `Source: mock`) and surfaces any
-  live-path error so silent failures are impossible.
+- **Live** — when the env var is truthy (`1`, `true`, `yes`, `on`),
+  `ngsiem_query_demo` executes `query` against the `search-all` repository
+  via `NGSIEMModule._execute_query`. Credentials come from `FalconClient`'s
+  normal resolution chain (env vars or the credential file). The `start_time`
+  and `max_results` parameters flow through.
+- **Mock** — when the env var is absent/falsy, or when the live call raises
+  / returns `success: False`, the tool falls back to
+  `mock_data.generate_process_events` so the pilot still renders. The text
+  content explicitly reports which source produced the events
+  (`Source: live` vs `Source: mock`) and surfaces any live-path error so
+  silent failures are impossible.
 
 ---
 
@@ -104,10 +107,10 @@ If any of these fail, update the feasibility doc's open questions and the
 
 ## Live / mock wiring (already done)
 
-`server.py` already dispatches based on `FALCON_CLIENT_ID`:
+`server.py` already dispatches based on `CROWDSTRIKE_PREFAB_LIVE`:
 
-- `_fetch_events(...)` checks the env var; absent → mock.
-- If present, it calls `_run_live_query(...)` which lazy-imports `FalconClient`
+- `_fetch_events(...)` calls `_live_mode_enabled()`; not truthy → mock.
+- If truthy, it calls `_run_live_query(...)` which lazy-imports `FalconClient`
   and `NGSIEMModule` and invokes `module._execute_query(query, start_time, max_results)`.
 - Any exception or `success: False` from the live call degrades to mock
   with the error text appended to `ToolResult.content`.

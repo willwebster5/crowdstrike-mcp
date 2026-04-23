@@ -69,19 +69,19 @@ async def test_ngsiem_query_drilldown_returns_single_row():
 
 
 @pytest.mark.anyio
-async def test_ngsiem_query_demo_mock_path_when_no_creds(monkeypatch):
-    monkeypatch.delenv("FALCON_CLIENT_ID", raising=False)
+async def test_ngsiem_query_demo_mock_path_when_live_disabled(monkeypatch):
+    monkeypatch.delenv("CROWDSTRIKE_PREFAB_LIVE", raising=False)
     tools = await app.list_tools()
     tool = next(t for t in tools if t.name == "ngsiem_query_demo")
     result = await tool.run(arguments={"query": "q", "count": 12, "seed": 7})
     text = "\n".join(block.text for block in result.content if hasattr(block, "text"))
     assert "Source: mock" in text
-    assert "FALCON_CLIENT_ID not set" in text
+    assert "CROWDSTRIKE_PREFAB_LIVE" in text
 
 
 @pytest.mark.anyio
 async def test_ngsiem_query_demo_live_path_used_when_creds_set(monkeypatch):
-    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+    monkeypatch.setenv("CROWDSTRIKE_PREFAB_LIVE", "1")
     live_events = [
         {
             "ComputerName": "LIVE-HOST-01",
@@ -111,7 +111,7 @@ async def test_ngsiem_query_demo_live_path_used_when_creds_set(monkeypatch):
 
 @pytest.mark.anyio
 async def test_ngsiem_query_demo_live_failure_surfaces_error_and_falls_back(monkeypatch):
-    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+    monkeypatch.setenv("CROWDSTRIKE_PREFAB_LIVE", "1")
 
     def fake_live(query, start_time, max_results):
         return {"success": False, "error": "HTTP 403: forbidden"}
@@ -127,7 +127,7 @@ async def test_ngsiem_query_demo_live_failure_surfaces_error_and_falls_back(monk
 
 @pytest.mark.anyio
 async def test_ngsiem_query_demo_live_exception_does_not_crash_tool(monkeypatch):
-    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+    monkeypatch.setenv("CROWDSTRIKE_PREFAB_LIVE", "1")
 
     def fake_live(query, start_time, max_results):
         raise RuntimeError("auth blew up")
@@ -144,7 +144,7 @@ async def test_ngsiem_query_demo_live_exception_does_not_crash_tool(monkeypatch)
 
 @pytest.mark.anyio
 async def test_ngsiem_query_demo_live_zero_events_reported_honestly(monkeypatch):
-    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+    monkeypatch.setenv("CROWDSTRIKE_PREFAB_LIVE", "1")
 
     def fake_live(query, start_time, max_results):
         return {"success": True, "events": []}
@@ -163,7 +163,7 @@ async def test_ngsiem_query_demo_live_zero_events_reported_honestly(monkeypatch)
 async def test_ngsiem_query_demo_handles_live_int_epoch_timestamps(monkeypatch):
     # Regression for CD's "fromisoformat: argument must be str" crash —
     # live NGSIEM returns @timestamp as epoch ms (int). Must not raise.
-    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+    monkeypatch.setenv("CROWDSTRIKE_PREFAB_LIVE", "1")
     live_events = [
         {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776470400000},
         {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776474000000},

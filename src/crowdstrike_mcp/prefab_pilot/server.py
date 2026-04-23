@@ -10,9 +10,11 @@ Run directly with:
 
     pip install -e '.[prefab-pilot]'
 
-When ``FALCON_CLIENT_ID`` is set in the environment, the ``ngsiem_query_demo``
-tool executes ``query`` against live NGSIEM. Otherwise (or on live-path
-failure) it falls back to deterministic synthetic data so the pilot remains
+When ``CROWDSTRIKE_PREFAB_LIVE`` is truthy in the environment, the
+``ngsiem_query_demo`` tool executes ``query`` against live NGSIEM
+(credentials resolved through ``FalconClient``'s normal chain: env vars or
+~/.config/falcon/credentials.json). Otherwise — or on live-path failure —
+it falls back to deterministic synthetic data so the pilot remains
 runnable without credentials. The text fallback explicitly reports which
 path produced the rendered events.
 
@@ -43,6 +45,11 @@ app = FastMCPApp(name="crowdstrike-prefab-pilot")
 DEFAULT_QUERY = "#repo=fdr event_simpleName=ProcessRollup2"
 DEFAULT_START_TIME = "1h"
 DEFAULT_MAX_RESULTS = 100
+_LIVE_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _live_mode_enabled() -> bool:
+    return os.environ.get("CROWDSTRIKE_PREFAB_LIVE", "").strip().lower() in _LIVE_TRUTHY
 
 
 @dataclass(frozen=True)
@@ -74,11 +81,11 @@ def _fetch_events(
     """Return events from the live path when creds are configured, otherwise
     from the synthetic generator. Any live-path failure degrades gracefully
     to mock data with an explicit note so the UI still renders."""
-    if not os.environ.get("FALCON_CLIENT_ID"):
+    if not _live_mode_enabled():
         return _QueryOutcome(
             events=generate_process_events(count=count, seed=seed),
             source="mock",
-            note="FALCON_CLIENT_ID not set — showing synthetic events.",
+            note="CROWDSTRIKE_PREFAB_LIVE is not truthy — showing synthetic events.",
         )
     try:
         result = _run_live_query(query, start_time, max_results)
@@ -115,11 +122,13 @@ def ngsiem_query_demo(
 ) -> ToolResult:
     """Render an NGSIEM query result as a Prefab UI.
 
-    When ``FALCON_CLIENT_ID`` is set, ``query``/``start_time``/``max_results``
-    drive a live CQL search against the ``search-all`` repository.
-    Otherwise ``count``/``seed`` drive a deterministic synthetic result so
-    the pilot still renders offline. On live-path failure the tool falls
-    back to mock data and surfaces the error in the text content.
+    When ``CROWDSTRIKE_PREFAB_LIVE`` is truthy,
+    ``query``/``start_time``/``max_results`` drive a live CQL search against
+    the ``search-all`` repository (FalconClient resolves creds from env or
+    the credential file). Otherwise ``count``/``seed`` drive a deterministic
+    synthetic result so the pilot still renders offline. On live-path failure
+    the tool falls back to mock data and surfaces the error in the text
+    content — silent fallbacks are intentionally not supported.
 
     Returns a ToolResult carrying both the interactive Prefab layout (for
     hosts that render MCP Apps — Claude Desktop, Claude.ai) and a text
