@@ -75,3 +75,90 @@ def test_query_summary_is_immutable():
     summary = summarize_events([])
     with pytest.raises(Exception):
         summary.row_count = 999  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------
+# Live-shape tolerance: the NGSIEM/Humio API returns @timestamp as epoch
+# milliseconds (int), not an ISO string. Records may also be missing fields
+# or carry None values. summarize_events must not raise on any of these.
+# --------------------------------------------------------------------------
+
+
+def test_summarize_events_accepts_int_epoch_millis_timestamp():
+    # 2026-04-22T00:00:00Z and 2026-04-22T01:30:00Z as epoch ms
+    events = [
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776470400000},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776475800000},
+    ]
+    summary = summarize_events(events)
+    assert summary.row_count == 2
+    # Two events, one hour apart → two buckets
+    assert len(summary.hourly_buckets) == 2
+    assert all(b["count"] == 1 for b in summary.hourly_buckets)
+
+
+def test_summarize_events_accepts_numeric_string_epoch_millis():
+    events = [
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": "1776470400000"},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": "1776470400000"},
+    ]
+    summary = summarize_events(events)
+    assert summary.row_count == 2
+    assert len(summary.hourly_buckets) == 1
+    assert summary.hourly_buckets[0]["count"] == 2
+
+
+def test_summarize_events_skips_events_with_missing_timestamp():
+    events = [
+        {"ComputerName": "H", "event_simpleName": "X"},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776470400000},
+    ]
+    summary = summarize_events(events)
+    assert summary.row_count == 2
+    assert len(summary.hourly_buckets) == 1
+
+
+def test_summarize_events_skips_events_with_none_timestamp():
+    events = [
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": None},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776470400000},
+    ]
+    summary = summarize_events(events)
+    assert summary.row_count == 2
+    assert len(summary.hourly_buckets) == 1
+
+
+def test_summarize_events_skips_events_with_garbage_timestamp():
+    events = [
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": "not-a-timestamp"},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776470400000},
+    ]
+    summary = summarize_events(events)
+    assert summary.row_count == 2
+    # Garbage skipped; only the one valid event contributes to the bucket
+    assert len(summary.hourly_buckets) == 1
+    assert summary.hourly_buckets[0]["count"] == 1
+
+
+def test_summarize_events_tolerates_missing_host_and_event_name():
+    events = [
+        {"@timestamp": 1776470400000},
+        {"ComputerName": None, "event_simpleName": None, "@timestamp": 1776470400000},
+    ]
+    summary = summarize_events(events)
+    assert summary.row_count == 2
+    assert summary.top_host is None
+    assert summary.top_event_name is None
+
+
+def test_summarize_events_mixed_timestamp_shapes_produce_sensible_range():
+    # One ISO string, one epoch int — the reducer should normalize both.
+    events = [
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": "2026-04-22T00:00:00+00:00"},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776474000000},  # +1h
+    ]
+    summary = summarize_events(events)
+    assert summary.row_count == 2
+    assert summary.time_range is not None
+    start, end = summary.time_range
+    assert start < end

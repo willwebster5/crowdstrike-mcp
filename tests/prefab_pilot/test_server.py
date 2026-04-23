@@ -68,6 +68,118 @@ async def test_ngsiem_query_drilldown_returns_single_row():
     assert result.content or result.structured_content
 
 
+@pytest.mark.anyio
+async def test_ngsiem_query_demo_mock_path_when_no_creds(monkeypatch):
+    monkeypatch.delenv("FALCON_CLIENT_ID", raising=False)
+    tools = await app.list_tools()
+    tool = next(t for t in tools if t.name == "ngsiem_query_demo")
+    result = await tool.run(arguments={"query": "q", "count": 12, "seed": 7})
+    text = "\n".join(block.text for block in result.content if hasattr(block, "text"))
+    assert "Source: mock" in text
+    assert "FALCON_CLIENT_ID not set" in text
+
+
+@pytest.mark.anyio
+async def test_ngsiem_query_demo_live_path_used_when_creds_set(monkeypatch):
+    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+    live_events = [
+        {
+            "ComputerName": "LIVE-HOST-01",
+            "event_simpleName": "ProcessRollup2",
+            "@timestamp": 1776470400000,
+            "UserName": "jdoe",
+            "ImageFileName": "/usr/bin/bash",
+        }
+    ]
+    captured: dict = {}
+
+    def fake_live(query, start_time, max_results):
+        captured["query"] = query
+        captured["start_time"] = start_time
+        captured["max_results"] = max_results
+        return {"success": True, "events": live_events}
+
+    monkeypatch.setattr("crowdstrike_mcp.prefab_pilot.server._run_live_query", fake_live)
+    tools = await app.list_tools()
+    tool = next(t for t in tools if t.name == "ngsiem_query_demo")
+    result = await tool.run(arguments={"query": "#repo=fdr *", "start_time": "6h", "max_results": 50})
+    text = "\n".join(block.text for block in result.content if hasattr(block, "text"))
+    assert "Source: live" in text
+    assert "LIVE-HOST-01" in text
+    assert captured == {"query": "#repo=fdr *", "start_time": "6h", "max_results": 50}
+
+
+@pytest.mark.anyio
+async def test_ngsiem_query_demo_live_failure_surfaces_error_and_falls_back(monkeypatch):
+    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+
+    def fake_live(query, start_time, max_results):
+        return {"success": False, "error": "HTTP 403: forbidden"}
+
+    monkeypatch.setattr("crowdstrike_mcp.prefab_pilot.server._run_live_query", fake_live)
+    tools = await app.list_tools()
+    tool = next(t for t in tools if t.name == "ngsiem_query_demo")
+    result = await tool.run(arguments={"query": "q"})
+    text = "\n".join(block.text for block in result.content if hasattr(block, "text"))
+    assert "Source: mock" in text
+    assert "HTTP 403: forbidden" in text
+
+
+@pytest.mark.anyio
+async def test_ngsiem_query_demo_live_exception_does_not_crash_tool(monkeypatch):
+    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+
+    def fake_live(query, start_time, max_results):
+        raise RuntimeError("auth blew up")
+
+    monkeypatch.setattr("crowdstrike_mcp.prefab_pilot.server._run_live_query", fake_live)
+    tools = await app.list_tools()
+    tool = next(t for t in tools if t.name == "ngsiem_query_demo")
+    result = await tool.run(arguments={"query": "q"})
+    text = "\n".join(block.text for block in result.content if hasattr(block, "text"))
+    assert "Source: mock" in text
+    assert "RuntimeError" in text
+    assert "auth blew up" in text
+
+
+@pytest.mark.anyio
+async def test_ngsiem_query_demo_live_zero_events_reported_honestly(monkeypatch):
+    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+
+    def fake_live(query, start_time, max_results):
+        return {"success": True, "events": []}
+
+    monkeypatch.setattr("crowdstrike_mcp.prefab_pilot.server._run_live_query", fake_live)
+    tools = await app.list_tools()
+    tool = next(t for t in tools if t.name == "ngsiem_query_demo")
+    result = await tool.run(arguments={"query": "q", "start_time": "15m"})
+    text = "\n".join(block.text for block in result.content if hasattr(block, "text"))
+    assert "Source: live" in text
+    assert "0 events" in text
+    assert "15m" in text
+
+
+@pytest.mark.anyio
+async def test_ngsiem_query_demo_handles_live_int_epoch_timestamps(monkeypatch):
+    # Regression for CD's "fromisoformat: argument must be str" crash —
+    # live NGSIEM returns @timestamp as epoch ms (int). Must not raise.
+    monkeypatch.setenv("FALCON_CLIENT_ID", "stub-id")
+    live_events = [
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776470400000},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776474000000},
+    ]
+
+    def fake_live(query, start_time, max_results):
+        return {"success": True, "events": live_events}
+
+    monkeypatch.setattr("crowdstrike_mcp.prefab_pilot.server._run_live_query", fake_live)
+    tools = await app.list_tools()
+    tool = next(t for t in tools if t.name == "ngsiem_query_demo")
+    result = await tool.run(arguments={"query": "*"})
+    assert result.structured_content
+    assert result.structured_content["type"] == "Column"
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"

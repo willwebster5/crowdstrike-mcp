@@ -21,8 +21,16 @@ A standalone stdio MCP server that exposes two tools:
 - `ngsiem_query_drilldown` — an `@app.tool()` the UI calls when a row is
   clicked. Returns the full JSON for a single event.
 
-The pilot uses **synthetic data** from `mock_data.generate_process_events`.
-No Falcon credentials are required to run it.
+The pilot has **two execution paths**, gated on `FALCON_CLIENT_ID`:
+
+- **Live** — when `FALCON_CLIENT_ID` is set, `ngsiem_query_demo` executes
+  `query` against the `search-all` repository via `NGSIEMModule._execute_query`.
+  The `start_time` and `max_results` parameters flow through.
+- **Mock** — when the env var is absent, or when the live call raises / returns
+  `success: False`, the tool falls back to `mock_data.generate_process_events`
+  so the pilot still renders. The text content explicitly reports which source
+  produced the events (`Source: live` vs `Source: mock`) and surfaces any
+  live-path error so silent failures are impossible.
 
 ---
 
@@ -94,44 +102,31 @@ If any of these fail, update the feasibility doc's open questions and the
 
 ---
 
-## What to swap for real Falcon credentials
+## Live / mock wiring (already done)
 
-The mock generator is a single replaceable seam. To wire up live NGSIEM:
+`server.py` already dispatches based on `FALCON_CLIENT_ID`:
 
-1. In `server.py`, replace the `events = generate_process_events(...)` line
-   inside `ngsiem_query_demo`:
+- `_fetch_events(...)` checks the env var; absent → mock.
+- If present, it calls `_run_live_query(...)` which lazy-imports `FalconClient`
+  and `NGSIEMModule` and invokes `module._execute_query(query, start_time, max_results)`.
+- Any exception or `success: False` from the live call degrades to mock
+  with the error text appended to `ToolResult.content`.
 
-   ```python
-   # Before (mock):
-   events = generate_process_events(count=count, seed=seed)
+### `@timestamp` shape
 
-   # After (live):
-   from crowdstrike_mcp.client import FalconClient
-   from crowdstrike_mcp.modules.ngsiem import NGSIEMModule
+Live NGSIEM (Humio/LogScale) returns `@timestamp` as **epoch milliseconds (int)**,
+not an ISO string. `summary._coerce_timestamp` handles int/float (epoch s or ms,
+auto-detected), numeric string, ISO-8601 string, and skips `None` / missing /
+garbage values rather than crashing the reduction. If you ever see
+`fromisoformat: argument must be str` again, that coercion has regressed — add
+a test with the offending shape before fixing.
 
-   client = FalconClient()
-   client.authenticate()
-   module = NGSIEMModule(client)
-   events = module._execute_cql(query, limit=count)  # or the real public entry
-   ```
+### Open follow-ups
 
-   Check `src/crowdstrike_mcp/modules/ngsiem.py` for the exact query
-   execution entry point — the mock's dict shape intentionally matches the
-   fields `summary.summarize_events` expects
-   (`ComputerName`, `event_simpleName`, `@timestamp`, `UserName`,
-   `ImageFileName`), so no downstream changes should be needed.
-
-2. Do the same substitution in `ngsiem_query_drilldown` if you want the
-   drilldown to fetch a live event by `@id` instead of replaying the
-   seeded mock.
-
-3. Keep `generate_process_events` in place. It's useful for tests and for
-   offline development, and removing it would break the existing unit
-   tests in `tests/prefab_pilot/test_mock_data.py`.
-
-4. Consider an `if FALCON_CLIENT_ID:` gate so the pilot falls back to mock
-   data when no creds are configured — preserves the "runs out of the
-   box" property for demos.
+- `ngsiem_query_drilldown` still replays the synthetic seed. Wire it to fetch
+  a live event by `@id` when the main tool is in live mode.
+- The `DataTable` column set is hardcoded in `layout._TABLE_COLUMNS`. A real
+  migration would project columns from the query's `select()` output.
 
 ---
 
