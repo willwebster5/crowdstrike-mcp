@@ -180,6 +180,24 @@ async def test_ngsiem_query_demo_handles_live_int_epoch_timestamps(monkeypatch):
     assert result.structured_content["type"] == "Column"
 
 
+@pytest.mark.anyio
+async def test_ngsiem_query_demo_structured_content_uses_camelcase_aliases():
+    # Regression for "waiting for content" in Claude Desktop — Prefab's React
+    # renderer expects camelCase keys (cssClass, dataKey, xAxis, ...). Plain
+    # pydantic model_dump emits snake_case Python field names, which the
+    # renderer silently drops. Prefab's to_json() applies the aliases.
+    import json
+
+    tools = await app.list_tools()
+    tool = next(t for t in tools if t.name == "ngsiem_query_demo")
+    result = await tool.run(arguments={"query": "q", "count": 10})
+    blob = json.dumps(result.structured_content)
+    # Snake-case field names must NOT appear — they indicate the plain dump path.
+    assert '"css_class"' not in blob
+    assert '"on_mount"' not in blob
+    assert '"data_key"' not in blob
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
