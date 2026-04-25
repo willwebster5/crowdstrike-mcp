@@ -132,7 +132,9 @@ def ngsiem_query_demo(
 
     Returns a ToolResult carrying both the interactive Prefab layout (for
     hosts that render MCP Apps — Claude Desktop, Claude.ai) and a text
-    summary (for Claude Code and other non-rendering hosts).
+    summary (for Claude Code and other non-rendering hosts). FastMCP wraps
+    the layout Component in a PrefabApp envelope automatically; we don't
+    construct one manually because that would drop the text fallback.
     """
     outcome = _fetch_events(
         query=query,
@@ -155,24 +157,23 @@ def ngsiem_query_demo(
 
 
 @app.tool("ngsiem_query_drilldown")
-def ngsiem_query_drilldown(row_index: int, count: int = 30, seed: int = 1) -> ToolResult:
+def ngsiem_query_drilldown(row: dict) -> ToolResult:
     """Backend tool the UI calls when the user clicks a table row.
 
-    Returns the full JSON for a single event — much richer than the
-    column set in the main table, useful for pivot decisions.
-
-    Note: the drilldown currently replays the synthetic seed even when the
-    main tool is showing live events. Wiring it to fetch a specific live
-    event by ``@id`` is an open follow-up (see README).
+    The DataTable's ``on_row_click`` action passes the clicked row's full
+    dict here as ``$event``. Earlier versions replayed a mock seed; the live
+    row already carries every field the original event had (after #/@ key
+    sanitization), so we just return it — no second NGSIEM round-trip needed.
     """
-    events = generate_process_events(count=count, seed=seed)
-    if row_index < 0 or row_index >= len(events):
+    if not isinstance(row, dict):
         return ToolResult(
-            content=[TextContent(type="text", text=f"row_index {row_index} out of range (0..{len(events) - 1})")],
+            content=[TextContent(
+                type="text",
+                text=f"ngsiem_query_drilldown expected a row dict, got {type(row).__name__}",
+            )],
         )
-    row = events[row_index]
     return ToolResult(
-        content=[TextContent(type="text", text=json.dumps(row, indent=2))],
+        content=[TextContent(type="text", text=json.dumps(row, indent=2, default=str))],
         structured_content=row,
     )
 

@@ -67,11 +67,22 @@ async def test_ngsiem_query_demo_structured_content_is_a_prefab_envelope():
 
 @pytest.mark.anyio
 async def test_ngsiem_query_drilldown_returns_single_row():
+    # Drilldown now accepts the row dict directly (the DataTable's onRowClick
+    # passes $event — the clicked row — through to it). It just echoes the
+    # row out as text + structured content; no second NGSIEM round-trip.
     tools = await app.list_tools()
     tool = next(t for t in tools if t.name == "ngsiem_query_drilldown")
-    result = await tool.run(arguments={"row_index": 0, "count": 5, "seed": 1})
-    # Drilldown is a backend @app.tool — the UI calls it; content carries the JSON row
-    assert result.content or result.structured_content
+    row = {
+        "ComputerName": "HOST-01",
+        "event_simpleName": "ProcessRollup2",
+        "timestamp": "2026-04-25T12:00:00+00:00",
+        "ImageFileName": "/usr/bin/bash",
+    }
+    result = await tool.run(arguments={"row": row})
+    assert result.structured_content == row
+    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
+    assert "HOST-01" in text
+    assert "ProcessRollup2" in text
 
 
 @pytest.mark.anyio
@@ -203,6 +214,20 @@ async def test_ngsiem_query_demo_structured_content_uses_camelcase_aliases():
     assert '"css_class"' not in blob
     assert '"on_mount"' not in blob
     assert '"data_key"' not in blob
+
+
+@pytest.mark.anyio
+async def test_drilldown_backend_name_matches_layout_constant():
+    # The layout pre-computes the drilldown's wire-format name via
+    # hashed_backend_name(app, tool). If someone renames the app or the tool
+    # without updating layout.py's constants, the row-click action would
+    # dispatch to a name FastMCP never registered. Catch that loudly here.
+    from crowdstrike_mcp.prefab_pilot.layout import _DRILLDOWN_BACKEND_NAME
+
+    tools = await app.list_tools()
+    drilldown = next(t for t in tools if t.name == "ngsiem_query_drilldown")
+    expected_hash = drilldown.meta["fastmcp"]["_tool_hash"]
+    assert _DRILLDOWN_BACKEND_NAME == f"{expected_hash}_ngsiem_query_drilldown"
 
 
 @pytest.fixture
