@@ -30,11 +30,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9.0.0", "ruff>=0.8.0"]
-prefab-pilot = ["fastmcp[apps]>=3.2"]
+prefab-render = ["fastmcp[apps]>=3.2"]
 
 [project.scripts]
 crowdstrike-mcp = "crowdstrike_mcp.server:main"
-crowdstrike-prefab-pilot = "crowdstrike_mcp.prefab_pilot.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crowdstrike_mcp"]
