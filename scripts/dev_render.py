@@ -27,6 +27,8 @@ import os
 # Default to mock-mode unless the developer explicitly sets the flag elsewhere.
 os.environ.setdefault("CROWDSTRIKE_RENDER_MOCK", "1")
 
+from fastmcp import FastMCP
+
 from crowdstrike_mcp.client import FalconClient
 from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
 
@@ -36,5 +38,9 @@ from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
 _client = FalconClient.deferred()
 _module = NGSIEMRenderModule(_client)
 
-# fastmcp run / dev apps auto-detect a top-level `app` variable.
-app = _module._app
+# fastmcp's loader auto-detects a top-level `mcp`, `server`, or `app` of
+# type FastMCP. FastMCPApp itself doesn't match the isinstance check, so
+# we expose a real FastMCP server with the render module's FastMCPApp
+# mounted as a provider — exactly the production pattern.
+server = FastMCP("crowdstrike-render-dev")
+server.add_provider(_module._app)
