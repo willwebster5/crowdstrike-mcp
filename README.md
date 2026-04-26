@@ -2,7 +2,7 @@
 
 A modular, multi-transport [Model Context Protocol](https://modelcontextprotocol.io/) server that connects AI assistants to the CrowdStrike Falcon platform. Query NG-SIEM logs, triage alerts, inspect endpoints, manage detection rules, and audit cloud security posture — all through natural language.
 
-**v4.3** — Modular auto-discovery architecture with 77 tools across 14 modules.
+**v4.3** — Modular auto-discovery architecture with 79 tools across 15 modules (Prefab UI optional).
 
 ---
 
@@ -20,7 +20,7 @@ A modular, multi-transport [Model Context Protocol](https://modelcontextprotocol
               └───────────────────────┬────────────────────┘
                                       │
    ┌──────────────────────────────────▼────────────────────────────────────┐
-   │                      modules/  (14 modules · 77 tools)                │
+   │                      modules/  (15 modules · 79 tools)                │
    │                                                                       │
    │   Detection & triage:  ngsiem (14) · alerts (4) · correlation (7)     │
    │   Hosts & response:    hosts (3) · response (2) · rtr (7)             │
@@ -29,6 +29,7 @@ A modular, multi-transport [Model Context Protocol](https://modelcontextprotocol
    │   Vulnerabilities:     spotlight (6)                                  │
    │   Case & hunting:      case_management (15) · cao_hunting (5)         │
    │   Infrastructure:      response_store (2)                             │
+   │   UI rendering:        ngsiem_render (2, optional via prefab-render)  │
    └──────────────────────────────────┬────────────────────────────────────┘
                                       │
               ┌───────────────────────▼────────────────────┐
