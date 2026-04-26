@@ -20,6 +20,7 @@ pytest.importorskip("prefab_ui")
 
 def test_module_class_is_importable():
     from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+
     assert NGSIEMRenderModule is not None
 
 
@@ -35,6 +36,7 @@ def test_module_registers_two_tools_on_internal_app_at_construction():
     assert "ngsiem_query_drilldown" in module.tools
     # The internal app must exist and be a FastMCPApp.
     from fastmcp.apps import FastMCPApp
+
     assert isinstance(module._app, FastMCPApp)
 
 
@@ -69,9 +71,13 @@ async def test_render_tool_returns_tool_result_with_text_and_structured_content(
         return {
             "success": True,
             "events": generate_process_events(count=5, seed=1),
-            "events_processed": 5, "events_matched": 5, "events_returned": 5,
-            "query": query, "time_range": start_time,
+            "events_processed": 5,
+            "events_matched": 5,
+            "events_returned": 5,
+            "query": query,
+            "time_range": start_time,
         }
+
     monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
 
     result = await module.ngsiem_query_render(query="q", start_time="1h")
@@ -95,9 +101,16 @@ async def test_render_tool_text_fallback_includes_ref_id_resolvable_via_response
     module = NGSIEMRenderModule(mock_client)
 
     def fake_exec(query, start_time="1d", max_results=100, fields=None):
-        return {"success": True, "events": generate_process_events(count=3, seed=1),
-                "events_processed": 3, "events_matched": 3, "events_returned": 3,
-                "query": query, "time_range": start_time}
+        return {
+            "success": True,
+            "events": generate_process_events(count=3, seed=1),
+            "events_processed": 3,
+            "events_matched": 3,
+            "events_returned": 3,
+            "query": query,
+            "time_range": start_time,
+        }
+
     monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
 
     result = await module.ngsiem_query_render(query="q")
@@ -120,6 +133,7 @@ async def test_render_tool_query_failure_returns_error_text(monkeypatch):
 
     def fake_exec(query, start_time="1d", max_results=100, fields=None):
         return {"success": False, "error": "HTTP 403: forbidden"}
+
     monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
 
     result = await module.ngsiem_query_render(query="q")
@@ -162,9 +176,11 @@ async def test_render_mock_env_flag_short_circuits_execute_query(monkeypatch):
     module = NGSIEMRenderModule(mock_client)
 
     called = {"flag": False}
+
     def boom(*args, **kwargs):
         called["flag"] = True
         raise AssertionError("execute_query should not be called when CROWDSTRIKE_RENDER_MOCK=1")
+
     monkeypatch.setattr(module._ngsiem, "execute_query", boom)
     monkeypatch.setenv("CROWDSTRIKE_RENDER_MOCK", "1")
 
@@ -193,9 +209,13 @@ async def test_render_tool_layout_serializes_with_camelcase_aliases(monkeypatch)
         return {
             "success": True,
             "events": generate_process_events(count=10, seed=1),
-            "events_processed": 10, "events_matched": 10, "events_returned": 10,
-            "query": query, "time_range": start_time,
+            "events_processed": 10,
+            "events_matched": 10,
+            "events_returned": 10,
+            "query": query,
+            "time_range": start_time,
         }
+
     monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
 
     result = await module.ngsiem_query_render(query="q")
@@ -225,10 +245,15 @@ async def test_render_tool_handles_int_epoch_timestamps(monkeypatch):
 
     def fake_exec(query, start_time="1d", max_results=100, fields=None):
         return {
-            "success": True, "events": live_events,
-            "events_processed": 2, "events_matched": 2, "events_returned": 2,
-            "query": query, "time_range": start_time,
+            "success": True,
+            "events": live_events,
+            "events_processed": 2,
+            "events_matched": 2,
+            "events_returned": 2,
+            "query": query,
+            "time_range": start_time,
         }
+
     monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
 
     result = await module.ngsiem_query_render(query="*")

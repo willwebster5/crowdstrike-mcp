@@ -113,6 +113,7 @@ EXPECTED_WRITE_TOOLS = {
 # won't load.
 try:
     import prefab_ui  # noqa: F401
+
     EXPECTED_READ_TOOLS = EXPECTED_READ_TOOLS | {"ngsiem_query_render", "ngsiem_query_drilldown"}
 except ImportError:
     pass
@@ -205,8 +206,10 @@ def test_smoke_ngsiem_query_render_tool_registered_when_prefab_available():
     """Spec D5/D6 — when prefab_ui is installed, NGSIEMRenderModule is auto-
     discovered and its tools register on the main server."""
     from crowdstrike_mcp.modules.ngsiem_render import RENDER_AVAILABLE
+
     if not RENDER_AVAILABLE:
         import pytest
+
         pytest.skip("prefab_ui not installed in this environment")
 
     from unittest.mock import MagicMock

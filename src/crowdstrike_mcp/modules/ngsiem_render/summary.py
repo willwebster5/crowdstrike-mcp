@@ -36,12 +36,12 @@ class WidgetType(str, Enum):
     scattered ``is_X`` booleans.
     """
 
-    RAW_EVENTS = "raw_events"          # has timestamps; show hourly bar + table
+    RAW_EVENTS = "raw_events"  # has timestamps; show hourly bar + table
     AGGREGATE_TABLE = "aggregate_table"  # generic groupBy — show table only
-    SINGLE_VALUE = "single_value"      # 1 row, 1 numeric field — render as Metric
-    PIE_CANDIDATE = "pie_candidate"    # small-N label+count — show pie + table
-    SCATTER = "scatter"                # label + ≥2 numerics — show scatter + table
-    TIMECHART = "timechart"            # _bucket + _count — area chart, no table
+    SINGLE_VALUE = "single_value"  # 1 row, 1 numeric field — render as Metric
+    PIE_CANDIDATE = "pie_candidate"  # small-N label+count — show pie + table
+    SCATTER = "scatter"  # label + ≥2 numerics — show scatter + table
+    TIMECHART = "timechart"  # _bucket + _count — area chart, no table
     TIMECHART_MULTI = "timechart_multi"  # _bucket + multi-series — stacked area
 
 
@@ -220,9 +220,7 @@ def _detect_widget_type(events: list[dict]) -> WidgetType:
     #    timechart (rare but legal) stays a time series instead of collapsing
     #    to a Metric.
     if "_bucket" in first:
-        numeric_keys = [
-            k for k, v in first.items() if k != "_bucket" and _is_numeric(v)
-        ]
+        numeric_keys = [k for k, v in first.items() if k != "_bucket" and _is_numeric(v)]
         if len(numeric_keys) > 1:
             return WidgetType.TIMECHART_MULTI
         if len(numeric_keys) >= 1:
@@ -247,9 +245,7 @@ def _detect_widget_type(events: list[dict]) -> WidgetType:
     #    other.
     if _SCATTER_MIN_ROWS <= len(events) <= _SCATTER_MAX_ROWS:
         exclude = _TS_KEYS | {"_bucket"}
-        numeric_count = sum(
-            1 for k, v in first.items() if k not in exclude and _is_numeric(v)
-        )
+        numeric_count = sum(1 for k, v in first.items() if k not in exclude and _is_numeric(v))
         if numeric_count >= 2 and _first_string_field(events, exclude):
             return WidgetType.SCATTER
 
@@ -382,9 +378,7 @@ def _summarize_scatter(events: list[dict]) -> QuerySummary:
     exclude = _TS_KEYS | {"_bucket"}
     first = events[0]
     label_field = _first_string_field(events, exclude)
-    raw_numeric_keys = [
-        k for k, v in first.items() if k not in exclude and _is_numeric(v)
-    ]
+    raw_numeric_keys = [k for k, v in first.items() if k not in exclude and _is_numeric(v)]
     if len(raw_numeric_keys) < 2 or not label_field:
         # Defensive — detector should have ruled this out, but if events vary
         # in shape we degrade to AGGREGATE_TABLE rather than crash.

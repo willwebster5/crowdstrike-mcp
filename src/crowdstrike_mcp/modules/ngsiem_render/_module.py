@@ -109,8 +109,10 @@ class NGSIEMRenderModule(BaseModule):
         max_results = min(max(max_results, 1), 1000)
 
         import os
+
         if os.environ.get("CROWDSTRIKE_RENDER_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}:
             from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
+
             events_mock = generate_process_events(count=20, seed=1)
             result = {
                 "success": True,
@@ -127,10 +129,12 @@ class NGSIEMRenderModule(BaseModule):
         if not result.get("success"):
             error = result.get("error", "unknown error")
             return ToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=f"NGSIEM render query failed: {error}",
-                )],
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"NGSIEM render query failed: {error}",
+                    )
+                ],
             )
 
         events = result.get("events") or []
@@ -151,7 +155,7 @@ class NGSIEMRenderModule(BaseModule):
         if summary.top_host is not None:
             host, count = summary.top_host
             text_lines.append(f"Top host: {host} ({count})")
-        text_lines.append(f"To inspect specific events, call get_stored_response(ref_id=\"{ref_id}\").")
+        text_lines.append(f'To inspect specific events, call get_stored_response(ref_id="{ref_id}").')
 
         layout = build_ngsiem_query_layout(events=events, query=query, summary=summary)
 
@@ -175,10 +179,12 @@ class NGSIEMRenderModule(BaseModule):
 
         if not isinstance(row, dict):
             return ToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=f"ngsiem_query_drilldown expected a row dict, got {type(row).__name__}",
-                )],
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"ngsiem_query_drilldown expected a row dict, got {type(row).__name__}",
+                    )
+                ],
             )
         return ToolResult(
             content=[TextContent(type="text", text=json.dumps(row, indent=2, default=str))],

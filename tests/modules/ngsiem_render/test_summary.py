@@ -167,10 +167,7 @@ def test_widget_type_timechart_for_bucket_count():
 
 
 def test_widget_type_timechart_multi_for_bucket_with_multiple_series():
-    events = [
-        {"_bucket": 1776470400000 + i * 3_600_000, "ProcessRollup2": i, "DnsRequest": i + 1}
-        for i in range(24)
-    ]
+    events = [{"_bucket": 1776470400000 + i * 3_600_000, "ProcessRollup2": i, "DnsRequest": i + 1} for i in range(24)]
     summary = summarize_events(events)
     assert summary.widget_type == WidgetType.TIMECHART_MULTI
     assert set(summary.series_keys) == {"ProcessRollup2", "DnsRequest"}
@@ -194,10 +191,7 @@ def test_widget_type_single_value_uses_string_label_when_present():
 def test_widget_type_scatter_for_label_plus_two_numerics():
     # Aggregate with one host label + count + avg(RPort) — scatter wins over
     # pie because there's a real second axis worth plotting.
-    events = [
-        {"ComputerName": f"HOST-{i:02d}", "_count": i * 5, "avg_RPort": i * 11}
-        for i in range(1, 11)
-    ]
+    events = [{"ComputerName": f"HOST-{i:02d}", "_count": i * 5, "avg_RPort": i * 11} for i in range(1, 11)]
     summary = summarize_events(events)
     assert summary.widget_type == WidgetType.SCATTER
     # Axis keys are sanitized (sigils stripped) but underscores preserved —
@@ -212,10 +206,7 @@ def test_widget_type_scatter_for_label_plus_two_numerics():
 
 def test_widget_type_scatter_handles_logscale_string_numerics():
     # LogScale ships values as strings — same coercion path as pie/timechart.
-    events = [
-        {"ComputerName": f"H-{i}", "_count": str(i * 3), "rps": str(i * 7)}
-        for i in range(1, 6)
-    ]
+    events = [{"ComputerName": f"H-{i}", "_count": str(i * 3), "rps": str(i * 7)} for i in range(1, 6)]
     summary = summarize_events(events)
     assert summary.widget_type == WidgetType.SCATTER
     assert all(isinstance(p["count"], (int, float)) for p in summary.scatter_data)
@@ -233,10 +224,7 @@ def test_widget_type_scatter_falls_back_under_min_rows():
 
 def test_widget_type_pie_still_wins_for_single_numeric():
     # 1 numeric + 1 label = pie territory; scatter detection must not trigger.
-    events = [
-        {"event_simpleName": f"E{i}", "_count": i * 10}
-        for i in range(1, 6)
-    ]
+    events = [{"event_simpleName": f"E{i}", "_count": i * 10} for i in range(1, 6)]
     assert summarize_events(events).widget_type == WidgetType.PIE_CANDIDATE
 
 
@@ -265,10 +253,7 @@ def test_widget_type_single_event_with_timestamp_is_raw_events():
     # Regression: the live-path test fixture is exactly this — one event with
     # @timestamp as int epoch. Must NOT trip SINGLE_VALUE (numeric @timestamp
     # would otherwise count as the only numeric field).
-    events = [
-        {"ComputerName": "LIVE-HOST-01", "event_simpleName": "ProcessRollup2",
-         "@timestamp": 1776470400000, "UserName": "jdoe"}
-    ]
+    events = [{"ComputerName": "LIVE-HOST-01", "event_simpleName": "ProcessRollup2", "@timestamp": 1776470400000, "UserName": "jdoe"}]
     assert summarize_events(events).widget_type == WidgetType.RAW_EVENTS
 
 

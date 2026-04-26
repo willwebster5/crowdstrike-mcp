@@ -16,6 +16,7 @@ from __future__ import annotations
 
 try:
     import prefab_ui  # noqa: F401
+
     RENDER_AVAILABLE = True
 except ImportError:
     RENDER_AVAILABLE = False
@@ -23,6 +24,7 @@ except ImportError:
 if RENDER_AVAILABLE:
     try:
         from crowdstrike_mcp.modules.ngsiem_render._module import NGSIEMRenderModule
+
         __all__ = ["NGSIEMRenderModule", "RENDER_AVAILABLE"]
     except ImportError:
         # _module not yet created (during incremental implementation) or has

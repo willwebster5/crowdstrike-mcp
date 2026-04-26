@@ -59,13 +59,26 @@ _PROCESS_SCHEMA_KEYS = {"ComputerName", "event_simpleName", "UserName", "ImageFi
 # Any of these present in the data will appear as the leading columns
 # in the order listed here; remaining fields fill the rest (up to the cap).
 _PREFERRED_FIELDS = [
-    "timestamp", "ComputerName", "event_simpleName", "UserName",
-    "name", "ImageFileName", "aid", "repo", "event_count",
+    "timestamp",
+    "ComputerName",
+    "event_simpleName",
+    "UserName",
+    "name",
+    "ImageFileName",
+    "aid",
+    "repo",
+    "event_count",
 ]
 # Internal/noisy fields to push to the end or omit entirely.
 _DEPRIORITIZED_FIELDS = {
-    "rawstring", "ingesttimestamp", "humioAutoShard", "repo.cid",
-    "sourcetype", "timezone", "id", "cid",
+    "rawstring",
+    "ingesttimestamp",
+    "humioAutoShard",
+    "repo.cid",
+    "sourcetype",
+    "timezone",
+    "id",
+    "cid",
 }
 
 
@@ -145,10 +158,7 @@ def _hourly_chart(summary: QuerySummary) -> AreaChart | BarChart:
     if summary.widget_type == WidgetType.TIMECHART_MULTI:
         return AreaChart(
             data=summary.hourly_buckets,
-            series=[
-                ChartSeries(dataKey=k, label=_humanize(k))
-                for k in summary.series_keys
-            ],
+            series=[ChartSeries(dataKey=k, label=_humanize(k)) for k in summary.series_keys],
             xAxis="hour",
             height=320,
             stacked=True,
@@ -186,7 +196,7 @@ def _metric(summary: QuerySummary) -> Card:
                         value=formatted,
                         css_class="text-center scale-200",
                     ),
-                ]
+                ],
             ),
         ]
     )

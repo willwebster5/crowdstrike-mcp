@@ -99,10 +99,7 @@ def test_layout_timechart_uses_area_chart_not_bar_chart():
     # timechart() returns _bucket + _count rows. Layout picks AreaChart
     # (>100 bars is an unreadable wall, AreaChart reads the trend at a glance)
     # and skips the raw bucket table entirely.
-    events = [
-        {"_bucket": 1776470400000 + i * 3_600_000, "_count": 10 + i}
-        for i in range(168)
-    ]
+    events = [{"_bucket": 1776470400000 + i * 3_600_000, "_count": 10 + i} for i in range(168)]
     summary = summarize_events(events)
     assert summary.widget_type == WidgetType.TIMECHART
     layout = build_ngsiem_query_layout(events=events, query="...| timechart()", summary=summary)
@@ -201,10 +198,7 @@ def test_layout_pie_skipped_for_large_aggregate():
 
 
 def test_layout_scatter_renders_scatter_chart_alongside_table():
-    events = [
-        {"ComputerName": f"HOST-{i:02d}", "_count": i * 5, "avg_RPort": i * 11}
-        for i in range(1, 11)
-    ]
+    events = [{"ComputerName": f"HOST-{i:02d}", "_count": i * 5, "avg_RPort": i * 11} for i in range(1, 11)]
     summary = summarize_events(events)
     assert summary.widget_type == WidgetType.SCATTER
     layout = build_ngsiem_query_layout(events=events, query="q", summary=summary)
@@ -221,10 +215,7 @@ def test_layout_scatter_renders_scatter_chart_alongside_table():
 def test_layout_multi_series_timechart_uses_stacked_area_chart():
     # `timechart(... by=event_simpleName)` returns _bucket + one numeric column
     # per series value. AreaChart with multiple ChartSeries, stacked.
-    events = [
-        {"_bucket": 1776470400000 + i * 3_600_000, "ProcessRollup2": 10 + i, "DnsRequest": 5 + i}
-        for i in range(24)
-    ]
+    events = [{"_bucket": 1776470400000 + i * 3_600_000, "ProcessRollup2": 10 + i, "DnsRequest": 5 + i} for i in range(24)]
     summary = summarize_events(events)
     assert summary.widget_type == WidgetType.TIMECHART_MULTI
     layout = build_ngsiem_query_layout(events=events, query="...| timechart(by=...)", summary=summary)
@@ -241,10 +232,7 @@ def test_layout_single_event_with_timestamp_is_not_single_value():
     # Regression: a 1-row live response (e.g. fixture for live-path test) has
     # @timestamp as int epoch — must NOT trip SINGLE_VALUE detection or the
     # raw event will render as a Metric and the row data disappears.
-    events = [
-        {"ComputerName": "LIVE-HOST-01", "event_simpleName": "ProcessRollup2",
-         "@timestamp": 1776470400000, "UserName": "jdoe"}
-    ]
+    events = [{"ComputerName": "LIVE-HOST-01", "event_simpleName": "ProcessRollup2", "@timestamp": 1776470400000, "UserName": "jdoe"}]
     summary = summarize_events(events)
     assert summary.widget_type == WidgetType.RAW_EVENTS
     layout = build_ngsiem_query_layout(events=events, query="q", summary=summary)
