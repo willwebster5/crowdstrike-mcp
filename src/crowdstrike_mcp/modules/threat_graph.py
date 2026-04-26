@@ -40,7 +40,7 @@ from crowdstrike_mcp.resources.threatgraph_reference import ThreatGraphEdgeTypeC
 from crowdstrike_mcp.utils import format_text_response
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from fastmcp import FastMCP
 
 
 EDGE_TYPES_RESOURCE_URI = "falcon://reference/threatgraph-edge-types"

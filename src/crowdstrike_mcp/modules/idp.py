@@ -28,7 +28,7 @@ from crowdstrike_mcp.modules.base import BaseModule
 from crowdstrike_mcp.utils import format_text_response
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from fastmcp import FastMCP
 
 
 # Allowed enum values (mirrored from upstream + CrowdStrike GraphQL schema)

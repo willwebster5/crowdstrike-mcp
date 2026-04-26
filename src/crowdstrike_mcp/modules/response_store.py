@@ -16,7 +16,7 @@ from crowdstrike_mcp.response_store import ResponseStore
 from crowdstrike_mcp.utils import format_text_response
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from fastmcp import FastMCP
 
 # Common key fields for record_key lookup, in priority order
 _KEY_FIELDS = [

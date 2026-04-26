@@ -35,7 +35,7 @@ from crowdstrike_mcp.utils import (
 )
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from fastmcp import FastMCP
 
 # Optional imports for cross-module enrichment
 try:

@@ -15,7 +15,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from fastmcp import FastMCP
 
     from crowdstrike_mcp.client import FalconClient
 
