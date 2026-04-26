@@ -191,3 +191,23 @@ class TestToolsListSmoke:
         """Sanity: no overlap between read and write expected sets."""
         overlap = EXPECTED_READ_TOOLS & EXPECTED_WRITE_TOOLS
         assert not overlap, f"Tool in both read and write sets: {overlap}"
+
+
+def test_smoke_ngsiem_query_render_tool_registered_when_prefab_available():
+    """Spec D5/D6 — when prefab_ui is installed, NGSIEMRenderModule is auto-
+    discovered and its tools register on the main server."""
+    from crowdstrike_mcp.modules.ngsiem_render import RENDER_AVAILABLE
+    if not RENDER_AVAILABLE:
+        import pytest
+        pytest.skip("prefab_ui not installed in this environment")
+
+    from unittest.mock import MagicMock
+    from crowdstrike_mcp.registry import get_available_modules
+
+    instances = get_available_modules(MagicMock())
+    names = {m.__class__.__name__ for m in instances}
+    assert "NGSIEMRenderModule" in names
+
+    render_module = next(m for m in instances if m.__class__.__name__ == "NGSIEMRenderModule")
+    assert "ngsiem_query_render" in render_module.tools
+    assert "ngsiem_query_drilldown" in render_module.tools
