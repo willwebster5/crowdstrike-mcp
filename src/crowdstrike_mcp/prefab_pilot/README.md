@@ -25,7 +25,7 @@ The pilot has **two execution paths**, gated on `CROWDSTRIKE_PREFAB_LIVE`:
 
 - **Live** — when the env var is truthy (`1`, `true`, `yes`, `on`),
   `ngsiem_query_demo` executes `query` against the `search-all` repository
-  via `NGSIEMModule._execute_query`. Credentials come from `FalconClient`'s
+  via `NGSIEMModule.execute_query`. Credentials come from `FalconClient`'s
   normal resolution chain (env vars or the credential file). The `start_time`
   and `max_results` parameters flow through.
 - **Mock** — when the env var is absent/falsy, or when the live call raises
@@ -111,7 +111,7 @@ If any of these fail, update the feasibility doc's open questions and the
 
 - `_fetch_events(...)` calls `_live_mode_enabled()`; not truthy → mock.
 - If truthy, it calls `_run_live_query(...)` which lazy-imports `FalconClient`
-  and `NGSIEMModule` and invokes `module._execute_query(query, start_time, max_results)`.
+  and `NGSIEMModule` and invokes `module.execute_query(query, start_time, max_results)`.
 - Any exception or `success: False` from the live call degrades to mock
   with the error text appended to `ToolResult.content`.
 

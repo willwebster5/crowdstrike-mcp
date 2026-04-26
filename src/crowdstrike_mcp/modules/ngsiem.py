@@ -147,7 +147,7 @@ class NGSIEMModule(BaseModule):
         """Execute a CQL query on the search-all repository."""
         max_results = min(max(max_results, 1), 1000)
 
-        result = self._execute_query(query, start_time, max_results, fields=fields)
+        result = self.execute_query(query, start_time, max_results, fields=fields)
 
         if result.get("success"):
             events = result.get("events", [])
@@ -204,7 +204,7 @@ class NGSIEMModule(BaseModule):
     # Internal query execution (also called by AlertsModule)
     # ------------------------------------------------------------------
 
-    def _execute_query(
+    def execute_query(
         self,
         query: str,
         start_time: str = "1d",
@@ -453,7 +453,7 @@ class NGSIEMModule(BaseModule):
         on HTTP 200, or ``{"success": False, "error": <str>}`` on any
         non-2xx or thrown exception. Errors are extracted from both the
         top-level ``resources.errors`` and ``body.errors`` shapes that
-        falconpy may use, matching the pattern in ``_execute_query``.
+        falconpy may use, matching the pattern in ``execute_query``.
         """
         try:
             response = method(**kwargs)

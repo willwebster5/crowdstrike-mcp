@@ -68,7 +68,7 @@ def _run_live_query(query: str, start_time: str, max_results: int) -> dict:
     client = FalconClient()
     client.authenticate()
     module = NGSIEMModule(client)
-    return module._execute_query(query, start_time=start_time, max_results=max_results)
+    return module.execute_query(query, start_time=start_time, max_results=max_results)
 
 
 def _fetch_events(
