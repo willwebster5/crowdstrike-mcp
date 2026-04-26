@@ -33,6 +33,10 @@ class NGSIEMRenderModule(BaseModule):
 
     def __init__(self, client):
         super().__init__(client)
+        # Internal NGSIEMModule instance for the shared execute_query call.
+        # TODO: when a third consumer needs execute_query, promote it to a
+        # free function in crowdstrike_mcp/queries/ngsiem.py so neither
+        # module depends on instantiating the other.
         self._ngsiem = NGSIEMModule(client)
         # Build the FastMCPApp eagerly so the tool decorators run at
         # construction time, not at register_tools() time. Tools register
@@ -40,13 +44,37 @@ class NGSIEMRenderModule(BaseModule):
         # the main server in register_tools().
         self._app = FastMCPApp(_APP_NAME)
         self._register_app_tools()
-        self._log("Initialized")
+        self._log(f"Initialized FastMCPApp '{_APP_NAME}' with 2 tools")
 
     def _register_app_tools(self) -> None:
-        """Register UI tools on self._app (the FastMCPApp). The methods'
-        bodies are placeholders here; Tasks 9 and 10 replace them."""
-        self._app.ui("ngsiem_query_render")(self.ngsiem_query_render)
-        self._app.tool("ngsiem_query_drilldown")(self.ngsiem_query_drilldown)
+        """Register UI tools on self._app (the FastMCPApp).
+
+        Tool descriptions distinguish the user-rendering path from the
+        agent-only ngsiem_query tool: the agent should pick this when the
+        user wants to *see* results, not when the agent itself needs the
+        full event data for reasoning.
+        """
+        self._app.ui(
+            "ngsiem_query_render",
+            description=(
+                "Render an NGSIEM/CQL query result as an interactive Prefab UI "
+                "for the user. Use this tool when the user asks to see, view, "
+                "show, or visualize query results — NOT when you need the raw "
+                "event data for your own reasoning (use ngsiem_query for that). "
+                "Returns a brief summary plus a stored-response ref_id; call "
+                "get_stored_response(ref_id=...) afterwards if you need to "
+                "inspect specific events without re-running the query."
+            ),
+        )(self.ngsiem_query_render)
+        self._app.tool(
+            "ngsiem_query_drilldown",
+            description=(
+                "Backend tool the rendered DataTable invokes when the user "
+                "clicks a row. Echoes the row dict back. Not intended for "
+                "direct invocation by the agent — the rendered UI calls it "
+                "with the clicked row's full event data."
+            ),
+        )(self.ngsiem_query_drilldown)
         # Track names for visibility (BaseModule.tools list is part of the
         # registration contract — tests inspect it).
         self.tools.append("ngsiem_query_render")
