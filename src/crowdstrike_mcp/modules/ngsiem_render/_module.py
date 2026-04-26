@@ -118,5 +118,26 @@ class NGSIEMRenderModule(BaseModule):
         )
 
     def ngsiem_query_drilldown(self, row: dict):
-        """Placeholder — implemented in Task 10."""
-        raise NotImplementedError("Implemented in Task 10")
+        """Echo a clicked DataTable row back as text + structured content.
+
+        The DataTable's onRowClick action ships the clicked row's full dict
+        here via $event interpolation. We just return it — no second NGSIEM
+        round-trip needed because the row already carries every field
+        (after #/@ key sanitization) from the original event.
+        """
+        import json
+
+        from fastmcp.tools import ToolResult
+        from mcp.types import TextContent
+
+        if not isinstance(row, dict):
+            return ToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"ngsiem_query_drilldown expected a row dict, got {type(row).__name__}",
+                )],
+            )
+        return ToolResult(
+            content=[TextContent(type="text", text=json.dumps(row, indent=2, default=str))],
+            structured_content=row,
+        )

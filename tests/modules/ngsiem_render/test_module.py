@@ -120,3 +120,28 @@ async def test_render_tool_query_failure_returns_error_text(monkeypatch):
     text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
     assert "failed" in text.lower()
     assert "HTTP 403" in text
+
+
+def test_drilldown_returns_row_as_text_and_structured_content():
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+    row = {"ComputerName": "H-01", "event_simpleName": "ProcessRollup2"}
+    result = module.ngsiem_query_drilldown(row)
+
+    assert result.structured_content == row
+    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
+    assert "H-01" in text
+    assert "ProcessRollup2" in text
+
+
+def test_drilldown_with_non_dict_returns_typed_error():
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+    result = module.ngsiem_query_drilldown("not a dict")
+    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
+    assert "expected a row dict" in text
+    assert "str" in text
