@@ -145,3 +145,24 @@ def test_drilldown_with_non_dict_returns_typed_error():
     text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
     assert "expected a row dict" in text
     assert "str" in text
+
+
+@pytest.mark.anyio
+async def test_render_mock_env_flag_short_circuits_execute_query(monkeypatch):
+    """CROWDSTRIKE_RENDER_MOCK=1 returns mock events without calling execute_query."""
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+
+    called = {"flag": False}
+    def boom(*args, **kwargs):
+        called["flag"] = True
+        raise AssertionError("execute_query should not be called when CROWDSTRIKE_RENDER_MOCK=1")
+    monkeypatch.setattr(module._ngsiem, "execute_query", boom)
+    monkeypatch.setenv("CROWDSTRIKE_RENDER_MOCK", "1")
+
+    result = await module.ngsiem_query_render(query="anything")
+    assert called["flag"] is False
+    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
+    assert "Events:" in text or "events" in text

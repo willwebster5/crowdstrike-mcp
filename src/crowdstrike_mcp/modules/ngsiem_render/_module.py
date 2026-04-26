@@ -79,7 +79,22 @@ class NGSIEMRenderModule(BaseModule):
         from crowdstrike_mcp.response_store import ResponseStore
 
         max_results = min(max(max_results, 1), 1000)
-        result = self._ngsiem.execute_query(query, start_time=start_time, max_results=max_results)
+
+        import os
+        if os.environ.get("CROWDSTRIKE_RENDER_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}:
+            from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
+            events_mock = generate_process_events(count=20, seed=1)
+            result = {
+                "success": True,
+                "events": events_mock,
+                "events_processed": len(events_mock),
+                "events_matched": len(events_mock),
+                "events_returned": len(events_mock),
+                "query": query,
+                "time_range": start_time,
+            }
+        else:
+            result = self._ngsiem.execute_query(query, start_time=start_time, max_results=max_results)
 
         if not result.get("success"):
             error = result.get("error", "unknown error")
