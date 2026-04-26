@@ -10,6 +10,8 @@ the layout is unit-testable.
 
 from __future__ import annotations
 
+from fastmcp.server.providers.addressing import hashed_backend_name
+from prefab_ui.actions.mcp import CallTool
 from prefab_ui.components import (
     Badge,
     Card,
@@ -25,8 +27,6 @@ from prefab_ui.components import (
     Row,
     Text,
 )
-from fastmcp.server.providers.addressing import hashed_backend_name
-from prefab_ui.actions.mcp import CallTool, SendMessage
 from prefab_ui.components.charts import AreaChart, BarChart, ChartSeries, PieChart, ScatterChart
 
 from crowdstrike_mcp.modules.ngsiem_render.summary import QuerySummary, WidgetType
@@ -207,7 +207,6 @@ def _scatter_chart(summary: QuerySummary) -> ScatterChart:
     """Two-numeric aggregate as points. X = first numeric, Y = second; the
     label field rides along on each point so the renderer's tooltip can
     show which row produced the dot."""
-    x_label = _humanize(summary.scatter_x or "x")
     y_label = _humanize(summary.scatter_y or "y")
     return ScatterChart(
         data=summary.scatter_data,

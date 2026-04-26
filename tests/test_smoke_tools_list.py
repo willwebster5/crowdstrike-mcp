@@ -29,8 +29,6 @@ EXPECTED_READ_TOOLS = {
     "alert_analysis",
     "ngsiem_alert_analysis",
     "ngsiem_query",
-    "ngsiem_query_render",
-    "ngsiem_query_drilldown",
     "ngsiem_list_saved_queries",
     "ngsiem_get_saved_query_template",
     "ngsiem_list_lookup_files",
@@ -108,6 +106,16 @@ EXPECTED_WRITE_TOOLS = {
     "case_delete_tags",
     "case_upload_file",
 }
+
+# prefab-render is an optional extra; the render tools only register when
+# prefab_ui is importable. Add them to the expected read set only when the
+# extra is available so CI (base install) doesn't expect tools the runtime
+# won't load.
+try:
+    import prefab_ui  # noqa: F401
+    EXPECTED_READ_TOOLS = EXPECTED_READ_TOOLS | {"ngsiem_query_render", "ngsiem_query_drilldown"}
+except ImportError:
+    pass
 
 
 @contextmanager
@@ -202,6 +210,7 @@ def test_smoke_ngsiem_query_render_tool_registered_when_prefab_available():
         pytest.skip("prefab_ui not installed in this environment")
 
     from unittest.mock import MagicMock
+
     from crowdstrike_mcp.registry import get_available_modules
 
     instances = get_available_modules(MagicMock())

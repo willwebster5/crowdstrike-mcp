@@ -4,6 +4,9 @@ The module follows the fastmcp v2 composition pattern: at construction it
 builds its own FastMCPApp, registers UI tools on the app, and on
 register_tools(server) it mounts the app onto the main fastmcp.FastMCP
 server via add_provider.
+
+Skipped when prefab_ui isn't installed — NGSIEMRenderModule depends on the
+optional prefab-render extra, and CI runs the base install.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("prefab_ui")
 
 
 def test_module_class_is_importable():
@@ -79,6 +84,7 @@ async def test_render_tool_returns_tool_result_with_text_and_structured_content(
 @pytest.mark.anyio
 async def test_render_tool_text_fallback_includes_ref_id_resolvable_via_response_store(monkeypatch):
     import re
+
     from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
     from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
     from crowdstrike_mcp.response_store import ResponseStore
@@ -176,6 +182,7 @@ async def test_render_tool_layout_serializes_with_camelcase_aliases(monkeypatch)
     renderer silently drops. Verify the layout serializes correctly when
     by_alias=True is used (the path FastMCPApp takes at delivery time)."""
     import json
+
     from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
     from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
 

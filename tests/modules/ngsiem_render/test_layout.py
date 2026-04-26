@@ -10,9 +10,15 @@ We can't render these in a host, so tests verify:
 
 from __future__ import annotations
 
-from crowdstrike_mcp.modules.ngsiem_render.layout import build_ngsiem_query_layout
-from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
-from crowdstrike_mcp.modules.ngsiem_render.summary import WidgetType, summarize_events
+import pytest
+
+# layout.py imports from prefab_ui at module top — skip the whole file when
+# the optional prefab-render extra isn't installed.
+pytest.importorskip("prefab_ui")
+
+from crowdstrike_mcp.modules.ngsiem_render.layout import build_ngsiem_query_layout  # noqa: E402
+from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events  # noqa: E402
+from crowdstrike_mcp.modules.ngsiem_render.summary import WidgetType, summarize_events  # noqa: E402
 
 
 def _child_types(layout) -> list[str]:
