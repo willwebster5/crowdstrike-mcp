@@ -166,3 +166,63 @@ async def test_render_mock_env_flag_short_circuits_execute_query(monkeypatch):
     assert called["flag"] is False
     text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
     assert "Events:" in text or "events" in text
+
+
+@pytest.mark.anyio
+async def test_render_tool_layout_serializes_with_camelcase_aliases(monkeypatch):
+    """Regression for "waiting for content" in Claude Desktop — Prefab's React
+    renderer expects camelCase keys (cssClass, dataKey, xAxis, ...). Plain
+    pydantic model_dump emits snake_case Python field names, which the
+    renderer silently drops. Verify the layout serializes correctly when
+    by_alias=True is used (the path FastMCPApp takes at delivery time)."""
+    import json
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+    from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+
+    def fake_exec(query, start_time="1d", max_results=100, fields=None):
+        return {
+            "success": True,
+            "events": generate_process_events(count=10, seed=1),
+            "events_processed": 10, "events_matched": 10, "events_returned": 10,
+            "query": query, "time_range": start_time,
+        }
+    monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
+
+    result = await module.ngsiem_query_render(query="q")
+    # ToolResult serializes the layout Component to a dict at construction
+    # time — using by_alias semantics (the path FastMCPApp takes at delivery).
+    blob = json.dumps(result.structured_content)
+    # Snake-case Python field names must NOT appear — they would indicate the
+    # alias machinery silently broke and the renderer would drop those keys.
+    assert '"css_class"' not in blob
+    assert '"on_mount"' not in blob
+    assert '"data_key"' not in blob
+
+
+@pytest.mark.anyio
+async def test_render_tool_handles_int_epoch_timestamps(monkeypatch):
+    """Regression for CD's "fromisoformat: argument must be str" crash —
+    live NGSIEM returns @timestamp as epoch ms (int). Must not raise."""
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+
+    live_events = [
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776470400000},
+        {"ComputerName": "H", "event_simpleName": "X", "@timestamp": 1776474000000},
+    ]
+
+    def fake_exec(query, start_time="1d", max_results=100, fields=None):
+        return {
+            "success": True, "events": live_events,
+            "events_processed": 2, "events_matched": 2, "events_returned": 2,
+            "query": query, "time_range": start_time,
+        }
+    monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
+
+    result = await module.ngsiem_query_render(query="*")
+    assert result.structured_content is not None
