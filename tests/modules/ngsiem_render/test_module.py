@@ -49,3 +49,74 @@ def test_module_register_tools_adds_provider_to_server():
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_render_tool_returns_tool_result_with_text_and_structured_content(monkeypatch):
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+    from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+
+    # Stub execute_query to return mock events deterministically.
+    def fake_exec(query, start_time="1d", max_results=100, fields=None):
+        return {
+            "success": True,
+            "events": generate_process_events(count=5, seed=1),
+            "events_processed": 5, "events_matched": 5, "events_returned": 5,
+            "query": query, "time_range": start_time,
+        }
+    monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
+
+    result = await module.ngsiem_query_render(query="q", start_time="1h")
+    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
+    assert "5 events" in text or "Events: 5" in text
+    assert "ref_id" in text or "resp_" in text
+    assert result.structured_content is not None
+
+
+@pytest.mark.anyio
+async def test_render_tool_text_fallback_includes_ref_id_resolvable_via_response_store(monkeypatch):
+    import re
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+    from crowdstrike_mcp.modules.ngsiem_render.mock_data import generate_process_events
+    from crowdstrike_mcp.response_store import ResponseStore
+
+    ResponseStore._reset()
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+
+    def fake_exec(query, start_time="1d", max_results=100, fields=None):
+        return {"success": True, "events": generate_process_events(count=3, seed=1),
+                "events_processed": 3, "events_matched": 3, "events_returned": 3,
+                "query": query, "time_range": start_time}
+    monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
+
+    result = await module.ngsiem_query_render(query="q")
+    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
+    match = re.search(r"resp_\d+", text)
+    assert match is not None, f"no ref_id in fallback text:\n{text}"
+    stored = ResponseStore.get(match.group(0))
+    assert stored is not None
+    assert stored.tool_name == "ngsiem_query_render"
+
+
+@pytest.mark.anyio
+async def test_render_tool_query_failure_returns_error_text(monkeypatch):
+    """If execute_query returns success=False, the tool surfaces the error
+    in text content rather than crashing."""
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+
+    def fake_exec(query, start_time="1d", max_results=100, fields=None):
+        return {"success": False, "error": "HTTP 403: forbidden"}
+    monkeypatch.setattr(module._ngsiem, "execute_query", fake_exec)
+
+    result = await module.ngsiem_query_render(query="q")
+    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
+    assert "failed" in text.lower()
+    assert "HTTP 403" in text
