@@ -29,6 +29,8 @@ EXPECTED_READ_TOOLS = {
     "alert_analysis",
     "ngsiem_alert_analysis",
     "ngsiem_query",
+    "ngsiem_query_render",
+    "ngsiem_query_drilldown",
     "ngsiem_list_saved_queries",
     "ngsiem_get_saved_query_template",
     "ngsiem_list_lookup_files",

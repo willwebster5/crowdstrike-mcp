@@ -1,0 +1,65 @@
+"""
+NGSIEMRenderModule — UI tool that renders NGSIEM query results as Prefab.
+
+Auto-discovered via registry.py. Holds an internal NGSIEMModule instance
+to share the query engine without depending on auto-discovery instance
+sharing (registry instantiates each module class with cls(client)).
+
+Uses the fastmcp v2 composition pattern: constructs its own FastMCPApp,
+registers UI tools via @app.ui() and @app.tool() on the FastMCPApp, then
+mounts the app onto the main fastmcp.FastMCP server via add_provider().
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from fastmcp.apps import FastMCPApp
+
+from crowdstrike_mcp.modules.base import BaseModule
+from crowdstrike_mcp.modules.ngsiem import NGSIEMModule
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+
+# Must match the FastMCPApp(name=...) below and the _APP_NAME constant
+# in layout.py — drives the drilldown wire-format hash.
+_APP_NAME = "crowdstrike-falcon"
+
+
+class NGSIEMRenderModule(BaseModule):
+    """Render NGSIEM query results as interactive Prefab UI."""
+
+    def __init__(self, client):
+        super().__init__(client)
+        self._ngsiem = NGSIEMModule(client)
+        # Build the FastMCPApp eagerly so the tool decorators run at
+        # construction time, not at register_tools() time. Tools register
+        # against self._app, then self._app gets added as a provider to
+        # the main server in register_tools().
+        self._app = FastMCPApp(_APP_NAME)
+        self._register_app_tools()
+        self._log("Initialized")
+
+    def _register_app_tools(self) -> None:
+        """Register UI tools on self._app (the FastMCPApp). The methods'
+        bodies are placeholders here; Tasks 9 and 10 replace them."""
+        self._app.ui("ngsiem_query_render")(self.ngsiem_query_render)
+        self._app.tool("ngsiem_query_drilldown")(self.ngsiem_query_drilldown)
+        # Track names for visibility (BaseModule.tools list is part of the
+        # registration contract — tests inspect it).
+        self.tools.append("ngsiem_query_render")
+        self.tools.append("ngsiem_query_drilldown")
+
+    def register_tools(self, server: "FastMCP") -> None:
+        """Mount the FastMCPApp onto the main fastmcp.FastMCP server."""
+        server.add_provider(self._app)
+
+    async def ngsiem_query_render(self, query: str, start_time: str = "1d", max_results: int = 100):
+        """Placeholder — implemented in Task 9."""
+        raise NotImplementedError("Implemented in Task 9")
+
+    def ngsiem_query_drilldown(self, row: dict):
+        """Placeholder — implemented in Task 10."""
+        raise NotImplementedError("Implemented in Task 10")
