@@ -57,7 +57,8 @@ def test_layout_table_rows_come_from_events():
     layout = build_ngsiem_query_layout(events=events, query="q", summary=summary)
     table = next(c for c in layout.children if c.type == "DataTable")
     assert len(table.rows) == 7
-    assert table.rows[0]["ComputerName"] == events[0]["ComputerName"]
+    # Rows are ExpandableRow instances; the underlying row dict lives in `.data`.
+    assert table.rows[0].data["ComputerName"] == events[0]["ComputerName"]
 
 
 def test_layout_table_has_expected_columns():
@@ -241,21 +242,70 @@ def test_layout_single_event_with_timestamp_is_not_single_value():
     assert "DataTable" in types
 
 
-def test_layout_data_table_wires_row_click_to_drilldown_tool():
-    # Clicking a row in any DataTable should invoke ngsiem_query_drilldown with
-    # the row dict as $event. The action's tool name is the hash-prefixed
-    # wire-format name — pre-computed by hashed_backend_name(app, tool) so the
-    # call dispatches correctly when FastMCP's auto-resolver isn't in the path.
-    from fastmcp.server.providers.addressing import hashed_backend_name
+def test_layout_data_table_rows_are_expandable_with_detail_panels():
+    """Each row is wrapped in ExpandableRow with a detail Component.
+    Replaces the old drilldown row-click model — analyst expands the
+    row inline to see fields + per-row action buttons."""
+    from prefab_ui.components import ExpandableRow
 
-    events = generate_process_events(count=5, seed=1)
+    events = generate_process_events(count=3, seed=1)
     summary = summarize_events(events)
     layout = build_ngsiem_query_layout(events=events, query="q", summary=summary)
     table = next(c for c in layout.children if c.type == "DataTable")
-    expected_name = hashed_backend_name("crowdstrike-falcon", "ngsiem_query_drilldown")
-    assert table.on_row_click is not None
-    assert table.on_row_click.tool == expected_name
-    assert table.on_row_click.arguments == {"row": "{{ $event }}"}
+
+    # No on_row_click — the chevron toggle drives expansion now.
+    assert table.on_row_click is None
+
+    assert len(table.rows) == 3
+    for row in table.rows:
+        assert isinstance(row, ExpandableRow)
+        assert row.detail is not None
+
+
+def test_layout_detail_panel_includes_action_buttons_and_form():
+    """The expanded detail panel ships an Ask Claude button, a custom
+    prompt Form (Textarea + Send), and Correlate/Pivot popovers when
+    relevant fields are present."""
+    import json
+
+    events = generate_process_events(count=1, seed=1)
+    summary = summarize_events(events)
+    layout = build_ngsiem_query_layout(events=events, query="q", summary=summary)
+    table = next(c for c in layout.children if c.type == "DataTable")
+    detail_blob = json.dumps(table.rows[0].detail.to_json())
+
+    # Action types are present (sendMessage is the row-action carrier).
+    assert "sendMessage" in detail_blob
+    # Free-form prompt input.
+    assert "Form" in detail_blob
+    assert "Textarea" in detail_blob
+    # Correlate/Pivot menus rendered as Popovers (process events have
+    # ComputerName + UserName + event_simpleName so both popovers fire).
+    assert "Popover" in detail_blob
+
+
+def test_layout_detail_panel_omits_correlate_options_when_fields_missing():
+    """Buttons inside Correlate/Pivot popovers are conditionally added
+    based on which row fields are present. A row with no UserName/host
+    /event_simpleName should produce no Correlate options at all (the
+    whole popover is omitted)."""
+    import json
+
+    events = [{"_count": 12345, "label": "all events"}]  # synthetic single-value-ish row
+    summary = summarize_events(events)
+    # SINGLE_VALUE skips the table entirely; force a non-aggregate path
+    # by giving a row with no recognized fields.
+    events = [{"random_field": "value", "another": 7}]
+    summary = summarize_events(events)
+    layout = build_ngsiem_query_layout(events=events, query="q", summary=summary)
+    # If there's no DataTable for this event shape, the test is moot.
+    tables = [c for c in layout.children if c.type == "DataTable"]
+    if not tables:
+        return
+    detail_blob = json.dumps(tables[0].rows[0].detail.to_json())
+    # No User/Host/Event fields → no Correlate or Pivot popover trigger labels.
+    assert "Correlate ▾" not in detail_blob
+    assert "Pivot ▾" not in detail_blob
 
 
 def test_layout_serializes_cleanly():

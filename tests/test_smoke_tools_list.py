@@ -114,7 +114,7 @@ EXPECTED_WRITE_TOOLS = {
 try:
     import prefab_ui  # noqa: F401
 
-    EXPECTED_READ_TOOLS = EXPECTED_READ_TOOLS | {"ngsiem_query_render", "ngsiem_query_drilldown"}
+    EXPECTED_READ_TOOLS = EXPECTED_READ_TOOLS | {"ngsiem_query_render"}
 except ImportError:
     pass
 
@@ -222,4 +222,3 @@ def test_smoke_ngsiem_query_render_tool_registered_when_prefab_available():
 
     render_module = next(m for m in instances if m.__class__.__name__ == "NGSIEMRenderModule")
     assert "ngsiem_query_render" in render_module.tools
-    assert "ngsiem_query_drilldown" in render_module.tools

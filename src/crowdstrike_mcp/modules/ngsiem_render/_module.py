@@ -23,8 +23,9 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
 
-# Must match the FastMCPApp(name=...) below and the _APP_NAME constant
-# in layout.py — drives the drilldown wire-format hash.
+# FastMCPApp name — surfaces in the renderer's _meta.fastmcp.app
+# annotation so the host knows which Prefab "app" the rendered tree
+# belongs to. Matches the main fastmcp.FastMCP server name.
 _APP_NAME = "crowdstrike-falcon"
 
 
@@ -44,12 +45,12 @@ class NGSIEMRenderModule(BaseModule):
         # the main server in register_tools().
         self._app = FastMCPApp(_APP_NAME)
         self._register_app_tools()
-        self._log(f"Initialized FastMCPApp '{_APP_NAME}' with 2 tools")
+        self._log(f"Initialized FastMCPApp '{_APP_NAME}' with 1 tool")
 
     def _register_app_tools(self) -> None:
         """Register UI tools on self._app (the FastMCPApp).
 
-        Tool descriptions distinguish the user-rendering path from the
+        Tool description distinguishes the user-rendering path from the
         agent-only ngsiem_query tool: the agent should pick this when the
         user wants to *see* results, not when the agent itself needs the
         full event data for reasoning.
@@ -66,19 +67,7 @@ class NGSIEMRenderModule(BaseModule):
                 "inspect specific events without re-running the query."
             ),
         )(self.ngsiem_query_render)
-        self._app.tool(
-            "ngsiem_query_drilldown",
-            description=(
-                "Backend tool the rendered DataTable invokes when the user "
-                "clicks a row. Echoes the row dict back. Not intended for "
-                "direct invocation by the agent — the rendered UI calls it "
-                "with the clicked row's full event data."
-            ),
-        )(self.ngsiem_query_drilldown)
-        # Track names for visibility (BaseModule.tools list is part of the
-        # registration contract — tests inspect it).
         self.tools.append("ngsiem_query_render")
-        self.tools.append("ngsiem_query_drilldown")
 
     def register_tools(self, server: "FastMCP") -> None:
         """Mount the FastMCPApp onto the main fastmcp.FastMCP server."""
@@ -162,31 +151,4 @@ class NGSIEMRenderModule(BaseModule):
         return ToolResult(
             content=[TextContent(type="text", text="\n".join(text_lines))],
             structured_content=layout,
-        )
-
-    def ngsiem_query_drilldown(self, row: dict):
-        """Echo a clicked DataTable row back as text + structured content.
-
-        The DataTable's onRowClick action ships the clicked row's full dict
-        here via $event interpolation. We just return it — no second NGSIEM
-        round-trip needed because the row already carries every field
-        (after #/@ key sanitization) from the original event.
-        """
-        import json
-
-        from fastmcp.tools import ToolResult
-        from mcp.types import TextContent
-
-        if not isinstance(row, dict):
-            return ToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"ngsiem_query_drilldown expected a row dict, got {type(row).__name__}",
-                    )
-                ],
-            )
-        return ToolResult(
-            content=[TextContent(type="text", text=json.dumps(row, indent=2, default=str))],
-            structured_content=row,
         )

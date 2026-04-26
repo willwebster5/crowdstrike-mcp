@@ -24,16 +24,18 @@ def test_module_class_is_importable():
     assert NGSIEMRenderModule is not None
 
 
-def test_module_registers_two_tools_on_internal_app_at_construction():
-    """Tools register on the module's internal FastMCPApp eagerly so that
-    register_tools(server) just needs to mount the app via add_provider."""
+def test_module_registers_render_tool_on_internal_app_at_construction():
+    """The render tool registers on the module's internal FastMCPApp eagerly
+    so that register_tools(server) just needs to mount the app via
+    add_provider. Drilldown was retired with the move to ExpandableRow —
+    expanded detail panels handle row inspection inline now."""
     from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
 
     mock_client = MagicMock()
     module = NGSIEMRenderModule(mock_client)
 
     assert "ngsiem_query_render" in module.tools
-    assert "ngsiem_query_drilldown" in module.tools
+    assert "ngsiem_query_drilldown" not in module.tools
     # The internal app must exist and be a FastMCPApp.
     from fastmcp.apps import FastMCPApp
 
@@ -140,31 +142,6 @@ async def test_render_tool_query_failure_returns_error_text(monkeypatch):
     text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
     assert "failed" in text.lower()
     assert "HTTP 403" in text
-
-
-def test_drilldown_returns_row_as_text_and_structured_content():
-    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
-
-    mock_client = MagicMock()
-    module = NGSIEMRenderModule(mock_client)
-    row = {"ComputerName": "H-01", "event_simpleName": "ProcessRollup2"}
-    result = module.ngsiem_query_drilldown(row)
-
-    assert result.structured_content == row
-    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
-    assert "H-01" in text
-    assert "ProcessRollup2" in text
-
-
-def test_drilldown_with_non_dict_returns_typed_error():
-    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
-
-    mock_client = MagicMock()
-    module = NGSIEMRenderModule(mock_client)
-    result = module.ngsiem_query_drilldown("not a dict")
-    text = "\n".join(b.text for b in result.content if hasattr(b, "text"))
-    assert "expected a row dict" in text
-    assert "str" in text
 
 
 @pytest.mark.anyio

@@ -10,10 +10,13 @@ the layout is unit-testable.
 
 from __future__ import annotations
 
-from fastmcp.server.providers.addressing import hashed_backend_name
-from prefab_ui.actions.mcp import CallTool
+import json
+
+from prefab_ui.actions import OpenLink
+from prefab_ui.actions.mcp import SendMessage
 from prefab_ui.components import (
     Badge,
+    Button,
     Card,
     CardContent,
     CardHeader,
@@ -21,28 +24,24 @@ from prefab_ui.components import (
     Column,
     DataTable,
     DataTableColumn,
+    ExpandableRow,
+    Form,
     Heading,
     Metric,
     Muted,
+    Popover,
     Row,
     Text,
+    Textarea,
 )
 from prefab_ui.components.charts import AreaChart, BarChart, ChartSeries, PieChart, ScatterChart
 
 from crowdstrike_mcp.modules.ngsiem_render.summary import QuerySummary, WidgetType
 
-# FastMCP routes backend-tool calls by a deterministic hash of (app_name,
-# tool_name) — see fastmcp.server.providers.addressing. When we ship an
-# action like CallTool("ngsiem_query_drilldown", ...) inside a layout we
-# build ourselves (i.e. via ToolResult.structured_content), FastMCP's
-# resolver doesn't get to swap the bare name for the wire-format name
-# (the resolver only fires when the handler returns a bare PrefabApp /
-# Component, which we don't because we want to keep the text fallback).
-# Pre-compute the wire name here so the action ships ready to dispatch.
-#
-# The app name MUST match the FastMCPApp(name=...) in server.py.
-_APP_NAME = "crowdstrike-falcon"
-_DRILLDOWN_BACKEND_NAME = hashed_backend_name(_APP_NAME, "ngsiem_query_drilldown")
+# TODO: replace with the customer's Falcon tenant URL pattern once known.
+# This stub points at the public host-management page; clicking will at
+# least land the user in their Falcon console even if the path is wrong.
+_FALCON_HOST_URL_TEMPLATE = "https://falcon.crowdstrike.com/host-management/host/{aid}"
 
 _PROCESS_COLUMNS = [
     DataTableColumn(key="timestamp", header="Time", sortable=True, width="180px"),
@@ -242,18 +241,241 @@ def _sanitize_row(row: dict) -> dict:
     }
 
 
+def _row_fields_card(row: dict) -> Card:
+    """Render every field of the row as label/value Text pairs.
+
+    Keeps things readable for wide rows: long values truncate at 200
+    chars in the visible Text but the full value still ships in the
+    SendMessage payloads (which include the row JSON).
+    """
+    rows: list = []
+    for key, value in row.items():
+        s_value = str(value)
+        if len(s_value) > 200:
+            s_value = s_value[:200] + "…"
+        rows.append(Row(children=[Muted(content=f"{key}:"), Text(content=s_value)], gap=2))
+    return Card(
+        children=[
+            CardHeader(children=[CardTitle(content="Row data")]),
+            CardContent(children=[Column(children=rows, gap=1)]),
+        ]
+    )
+
+
+def _ask_button(label: str, prompt: str) -> Button:
+    """Send-a-message button with a baked-in natural-language prompt.
+
+    All row-actions are intentionally framed as natural language: we ship
+    the agent context and let it decide which tools to run, rather than
+    pre-canning specific CQL queries.
+    """
+    return Button(label=label, on_click=SendMessage(prompt))
+
+
+def _correlate_popover(row: dict, row_json: str) -> Popover | None:
+    """Open a sub-menu of correlation prompts. Each item is conditional
+    on a relevant field being present — if no fields are present, the
+    whole popover is omitted (returns None)."""
+    user = row.get("UserName") or row.get("user.name") or row.get("UPN")
+    host = row.get("ComputerName")
+    aid = row.get("aid")
+    src_ip = row.get("source.ip") or row.get("LocalAddressIP4")
+    image = row.get("ImageFileName")
+    sha = row.get("SHA256HashData") or row.get("sha256")
+    event_name = row.get("event_simpleName")
+
+    items: list[Button] = []
+    if user:
+        items.append(
+            _ask_button(
+                "User",
+                f"What other activity is associated with user '{user}' around this event? "
+                f"Look across endpoints, SaaS auth, and network. Row context:\n{row_json}",
+            )
+        )
+    if host or aid:
+        items.append(
+            _ask_button(
+                "Endpoint / Host",
+                f"What else happened on host {host or aid!r} around this event? "
+                f"Surface notable processes, user logons, and outbound connections. Row context:\n{row_json}",
+            )
+        )
+    if user or host:
+        items.append(
+            _ask_button(
+                "SaaS",
+                f"Are there SaaS-auth events (Azure AD, Okta, GWS) tied to "
+                f"{('user ' + user) if user else ('host ' + str(host))} around this event? Row context:\n{row_json}",
+            )
+        )
+    if src_ip or host:
+        items.append(
+            _ask_button(
+                "Network",
+                f"Show network activity related to {('IP ' + str(src_ip)) if src_ip else ('host ' + str(host))} "
+                f"around this event. Row context:\n{row_json}",
+            )
+        )
+    if image or sha or event_name:
+        items.append(
+            _ask_button(
+                "IOC",
+                f"Are there other instances of this signature ({event_name or 'this event'}, "
+                f"{image or sha or 'no file/hash'}) on other hosts in the last 24 hours? Row context:\n{row_json}",
+            )
+        )
+
+    if not items:
+        return None
+
+    return Popover(
+        title="Correlate this event",
+        side="bottom",
+        children=[
+            Button(label="Correlate ▾", variant="outline"),
+            Column(children=items, gap=1),
+        ],
+    )
+
+
+def _pivot_popover(row: dict, row_json: str) -> Popover | None:
+    """Sub-menu of pivot prompts (more events from same host/user/etc)."""
+    user = row.get("UserName")
+    host = row.get("ComputerName")
+    event_name = row.get("event_simpleName")
+    timestamp = row.get("timestamp") or row.get("@timestamp")
+
+    items: list[Button] = []
+    if host:
+        items.append(
+            _ask_button(
+                "Same host",
+                f"Show all events on host '{host}' in the last 1 hour. Row context:\n{row_json}",
+            )
+        )
+    if user:
+        items.append(
+            _ask_button(
+                "Same user",
+                f"Show all events for user '{user}' in the last 1 hour. Row context:\n{row_json}",
+            )
+        )
+    if event_name:
+        items.append(
+            _ask_button(
+                "Same event_simpleName",
+                f"Show all '{event_name}' events in the last 1 hour. Row context:\n{row_json}",
+            )
+        )
+    if timestamp:
+        items.append(
+            _ask_button(
+                "Time window ±5 min",
+                f"Show all events within ±5 minutes of {timestamp}. Row context:\n{row_json}",
+            )
+        )
+
+    if not items:
+        return None
+
+    return Popover(
+        title="Pivot from this event",
+        side="bottom",
+        children=[
+            Button(label="Pivot ▾", variant="outline"),
+            Column(children=items, gap=1),
+        ],
+    )
+
+
+def _open_in_falcon_button(row: dict) -> Button | None:
+    """Open the host's page in the Falcon console. Hidden when no aid."""
+    aid = row.get("aid")
+    if not aid:
+        return None
+    return Button(
+        label="Open in Falcon",
+        variant="outline",
+        on_click=OpenLink(_FALCON_HOST_URL_TEMPLATE.format(aid=aid)),
+    )
+
+
+def _custom_prompt_form(row: dict, row_json: str, prompt_state_key: str) -> Form:
+    """Free-form prompt input — the user types a question, the agent
+    receives it with the row JSON appended as context."""
+    submit_template = "{{ " + prompt_state_key + " }}\n\nRow context (NGSIEM event):\n```json\n" + row_json + "\n```"
+    return Form(
+        on_submit=SendMessage(submit_template),
+        gap=2,
+        children=[
+            Muted(content="Ask Claude something about this event:"),
+            Textarea(
+                name=prompt_state_key,
+                placeholder="e.g., Is this normal for this user? Compare to baseline…",
+                rows=3,
+            ),
+            Row(children=[Button(label="Send to Claude", button_type="submit")], gap=2),
+        ],
+    )
+
+
+def _row_detail_panel(row: dict, row_index: int) -> Card:
+    """Build the full ExpandableRow detail Component for one row.
+
+    Layout:
+        Card[
+          row fields (label/value pairs)
+          custom prompt Form
+          Row[ Ask Claude | Correlate ▾ | Pivot ▾ | Open in Falcon ]
+        ]
+    """
+    row_json = json.dumps(row, indent=2, default=str)
+    prompt_state_key = f"row_{row_index}_prompt"
+
+    action_buttons: list = [
+        _ask_button(
+            "Ask Claude about this event",
+            f"What's notable about this NG-SIEM event? Anything suspicious, unusual, or worth following up on?\n```json\n{row_json}\n```",
+        ),
+    ]
+    correlate = _correlate_popover(row, row_json)
+    if correlate is not None:
+        action_buttons.append(correlate)
+    pivot = _pivot_popover(row, row_json)
+    if pivot is not None:
+        action_buttons.append(pivot)
+    falcon = _open_in_falcon_button(row)
+    if falcon is not None:
+        action_buttons.append(falcon)
+
+    return Card(
+        children=[
+            CardContent(
+                children=[
+                    Column(
+                        gap=4,
+                        children=[
+                            _row_fields_card(row),
+                            _custom_prompt_form(row, row_json, prompt_state_key),
+                            Row(children=action_buttons, gap=2),
+                        ],
+                    )
+                ]
+            )
+        ]
+    )
+
+
 def _events_table(events: list[dict]) -> DataTable:
     sanitized = [_sanitize_row(r) for r in events]
+    rows: list = [ExpandableRow(row, detail=_row_detail_panel(row, i)) for i, row in enumerate(sanitized)]
     return DataTable(
         columns=_get_columns(sanitized),
-        rows=sanitized,
+        rows=rows,
         search=True,
         paginated=True,
         pageSize=25,
-        onRowClick=CallTool(
-            _DRILLDOWN_BACKEND_NAME,
-            arguments={"row": "{{ $event }}"},
-        ),
     )
 
 
