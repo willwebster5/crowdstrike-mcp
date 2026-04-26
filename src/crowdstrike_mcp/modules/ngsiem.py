@@ -201,7 +201,7 @@ class NGSIEMModule(BaseModule):
             return format_text_response(error_text, raw=True)
 
     # ------------------------------------------------------------------
-    # Internal query execution (also called by AlertsModule)
+    # Public query execution (called by ngsiem_query and the render module)
     # ------------------------------------------------------------------
 
     def execute_query(
