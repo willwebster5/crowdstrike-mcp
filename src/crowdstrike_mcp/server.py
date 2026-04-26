@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from crowdstrike_mcp.client import FalconClient
 from crowdstrike_mcp.registry import get_available_modules
@@ -117,10 +117,7 @@ class FalconMCPServer:
         from crowdstrike_mcp.common.health import with_health_check
         from crowdstrike_mcp.common.session_auth import session_auth_middleware
 
-        if transport_type == "sse":
-            app = self.server.sse_app()
-        else:
-            app = self.server.streamable_http_app()
+        app = self.server.http_app(transport=transport_type)
 
         # Layer 1: per-session Falcon auth (innermost)
         app = session_auth_middleware(app)
