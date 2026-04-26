@@ -1,8 +1,13 @@
 # Prefab Pilot Integration — Design Spec
 
-**Date:** 2026-04-26
+**Date:** 2026-04-26 (revised post-spike same day)
 **Status:** Draft (pre-implementation)
 **Branch context:** `prototype/fastmcp-prefab-pilot` (PR #19)
+
+> **Revision note (post-spike):** D5 was rewritten after the FastMCPApp
+> drop-in spike (Task 1) showed FastMCPApp is a Provider, not a server.
+> The integration now switches to `fastmcp.FastMCP` v2 and uses
+> `add_provider(FastMCPApp)` for UI tool composition.
 
 ## Background
 
@@ -84,12 +89,35 @@ echoes the row back. No coupling to `ResponseStore`. (Future option C
 — inline row + `ref_id` riding along — is left open as a strictly
 additive change.)
 
-### D5. Server framework: adopt `FastMCPApp` (option A)
+### D5. Server framework: switch to `fastmcp.FastMCP` v2 + `add_provider(FastMCPApp)` (revised post-spike)
 
-Replace `FastMCP("crowdstrike-falcon")` with
-`FastMCPApp("crowdstrike-falcon")` in `server.py`. The
-`@app.ui()` decorator becomes available for this and future UI tools.
-Gated on a spike (see Risks).
+**Original decision (option A):** Replace
+`mcp.server.fastmcp.FastMCP` with `fastmcp.apps.FastMCPApp`.
+**Rejected by spike** — `FastMCPApp` is a `Provider`, not a server; it
+exposes neither `add_resource` nor HTTP-transport entry points.
+
+**Revised decision (option B):** Switch the main server class from
+`mcp.server.fastmcp.FastMCP` to `fastmcp.FastMCP` v2 (different package).
+Then construct a `FastMCPApp` inside `NGSIEMRenderModule` for the UI
+tools, and mount it on the main server via `server.add_provider(app)`.
+This preserves every existing module's tool/resource registration path,
+introduces `@app.ui()` for the new UI tools, and uses the framework's
+intended composition pattern.
+
+Surface compatibility verified by spike (see `scripts/spike_fastmcpapp.py`):
+
+- `.tool(name=...)` decorator: PASS
+- `.resource(uri, ...)` decorator: PASS
+- `.add_provider(FastMCPApp)`: PASS
+- `.http_app(transport='sse'|'streamable-http')`: PASS — single entry
+  point replaces the stdlib's separate `.sse_app()` / `.streamable_http_app()`
+- `.add_resource(Resource)`: FAIL on the v2 surface, but
+  `BaseModule._add_resource` has zero callers in the codebase, so this
+  is dead code we will remove.
+
+The HTTP transport delta is the only `server.py` plumbing change: the
+two-branch `if transport_type == "sse"` becomes a single
+`app = self.server.http_app(transport=transport_type)` call.
 
 ### D6. Module location: new sibling module (option B)
 
@@ -265,30 +293,26 @@ user clicks DataTable row
 
 ## Risks and mitigations
 
-### R1. `FastMCPApp` is not a drop-in for `FastMCP`
+### R1. Server framework migration (resolved by spike)
 
-**Risk:** `FastMCPApp` is not a subclass of `FastMCP`. We have not
-verified that it supports `server.resource(...)` registration, the
-prompt registration the existing modules use, lifespan hooks, or any
-other surface the existing 12-module server depends on.
+**Original risk:** `FastMCPApp` is not a subclass of `FastMCP`; surface
+compatibility unverified.
 
-**Mitigation:** Run a spike before any other implementation work:
+**Spike outcome:** `FastMCPApp` is a `Provider`, not a server — does
+not expose `add_resource` or HTTP transports. Direct swap not viable.
+`fastmcp.FastMCP` v2 (different package) IS a server with all required
+surfaces plus `add_provider`, so the path forward is "switch server
+class to `fastmcp.FastMCP` v2 and mount FastMCPApp via add_provider"
+(see D5).
 
-1. Construct `FastMCPApp("crowdstrike-falcon")` in isolation.
-2. Register one resource (`falcon://cql/syntax`).
-3. Register one existing module's tools.
-4. Run `tests/test_smoke_tools_list.py`.
+**Residual risk:** v2's `http_app()` API replaces the stdlib's
+`sse_app()`/`streamable_http_app()`. One call site in `server.py`
+(`_run_http`) needs to update. Existing HTTP-transport tests must pass
+after the change.
 
-Outcomes:
-
-- Spike passes -> implement as designed.
-- Spike fails on resources only -> patch the registration call, document
-  the diff, implement as designed.
-- Spike fails on a deep surface (lifespan, tool semantics) -> fall back
-  to keeping `FastMCP`, register render tools as plain `@app.tool` and
-  manually construct the `PrefabApp` envelope. This adds ~30 lines of
-  envelope-wrapping code we maintain ourselves. Update this spec and
-  re-review before implementing.
+**Mitigation:** keep an HTTP-transport smoke test in the verification
+gate (Task 16) and run `tests/test_smoke_tools_list.py` after the
+swap.
 
 ### R2. Lost standalone pilot harness
 

@@ -4,7 +4,9 @@
 
 **Goal:** Fold the standalone Prefab pilot server into the main `crowdstrike_mcp` server as a peer rendering tool that shares the NGSIEM query engine and emits `ResponseStore` ref_ids the agent can follow up on.
 
-**Architecture:** The main server swaps from `mcp.server.fastmcp.FastMCP` to `fastmcp.apps.FastMCPApp` so `@app.ui()` is available. A new `NGSIEMRenderModule` (auto-discovered like every other module) registers `ngsiem_query_render` and `ngsiem_query_drilldown`. It holds an internal `NGSIEMModule` instance and calls its newly-public `execute_query` so the query engine is shared with zero drift risk. The pilot's `prefab_pilot/` package is deleted; its `summary.py`/`layout.py`/`fallback.py` migrate under `modules/ngsiem_render/`.
+**Architecture:** The main server swaps from `mcp.server.fastmcp.FastMCP` to `fastmcp.FastMCP` v2 (different package — has `add_provider` plus all required tool/resource surfaces). `NGSIEMRenderModule` (auto-discovered like every other module) constructs an internal `FastMCPApp("crowdstrike-falcon")`, registers `ngsiem_query_render` via `@app.ui()` and `ngsiem_query_drilldown` via `@app.tool()` on it, and mounts the app onto the main server via `server.add_provider(self._app)`. The render module holds an internal `NGSIEMModule` instance and calls its newly-public `execute_query` so the query engine is shared with zero drift risk. The pilot's `prefab_pilot/` package is deleted; its `summary.py`/`layout.py`/`fallback.py` migrate under `modules/ngsiem_render/`.
+
+**Spike outcome (Task 1, completed 2026-04-26):** Direct swap to FastMCPApp rejected — it's a Provider, not a server. `fastmcp.FastMCP` v2 verified as compatible target: `tool()`, `resource()`, `add_provider(FastMCPApp)`, `http_app(transport=...)` all PASS. HTTP transport surface differs from stdlib (`sse_app()`/`streamable_http_app()` → unified `http_app(transport=...)`); single call site in `server.py:_run_http` needs updating.
 
 **Tech Stack:** Python 3.11+, `fastmcp.apps.FastMCPApp`, `prefab_ui` components/actions, `pytest`/`pytest-asyncio`, existing `BaseModule` + `ResponseStore` infrastructure.
 
@@ -49,12 +51,20 @@
 
 ---
 
-## Task 1: FastMCPApp drop-in spike
+## Task 1: FastMCPApp drop-in spike — COMPLETED 2026-04-26
+
+**Outcome:** Direct swap to `FastMCPApp` REJECTED — it's a `Provider`,
+not a server. Spike pivoted to verify `fastmcp.FastMCP` v2 as the
+alternative target, which PASSED. Final pattern: switch main server to
+`fastmcp.FastMCP` v2 and compose `FastMCPApp` via `add_provider`.
+
+The remainder of this task block is preserved for historical reference.
+Tasks 8 and 11 below reflect the revised approach.
 
 **Why:** Spec R1 requires confirming `FastMCPApp` supports the surfaces existing modules use (`.tool()`, `.add_resource()`, `.resource()`, `.run(transport=...)`) before any other code changes.
 
 **Files:**
-- Create: `scripts/spike_fastmcpapp.py` (temporary; deleted in Task 18)
+- Create: `scripts/spike_fastmcpapp.py` (temporary; deleted in Task 17)
 
 - [ ] **Step 1: Write the spike script**
 
@@ -467,8 +477,10 @@ Create `tests/modules/ngsiem_render/test_module.py`:
 ```python
 """Tests for NGSIEMRenderModule registration and tool wiring.
 
-Tests use the auto-discovered class instantiated against a real FastMCPApp
-to exercise the live registration path — same shape as production.
+The module follows the fastmcp v2 composition pattern: at construction it
+builds its own FastMCPApp, registers UI tools on the app, and on
+register_tools(server) it mounts the app onto the main fastmcp.FastMCP
+server via add_provider.
 """
 
 from __future__ import annotations
@@ -483,17 +495,32 @@ def test_module_class_is_importable():
     assert NGSIEMRenderModule is not None
 
 
-def test_module_registers_two_tools():
-    from fastmcp.apps import FastMCPApp
+def test_module_registers_two_tools_on_internal_app_at_construction():
+    """Tools register on the module's internal FastMCPApp eagerly so that
+    register_tools(server) just needs to mount the app via add_provider."""
     from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
 
     mock_client = MagicMock()
-    app = FastMCPApp("test")
     module = NGSIEMRenderModule(mock_client)
-    module.register_tools(app)
 
     assert "ngsiem_query_render" in module.tools
     assert "ngsiem_query_drilldown" in module.tools
+    # The internal app must exist and be a FastMCPApp.
+    from fastmcp.apps import FastMCPApp
+    assert isinstance(module._app, FastMCPApp)
+
+
+def test_module_register_tools_adds_provider_to_server():
+    """register_tools(server) calls server.add_provider with the internal app."""
+    from crowdstrike_mcp.modules.ngsiem_render import NGSIEMRenderModule
+
+    mock_client = MagicMock()
+    module = NGSIEMRenderModule(mock_client)
+
+    fake_server = MagicMock()
+    module.register_tools(fake_server)
+
+    fake_server.add_provider.assert_called_once_with(module._app)
 
 
 @pytest.fixture
@@ -506,7 +533,7 @@ def anyio_backend():
 Run: `pytest tests/modules/ngsiem_render/test_module.py::test_module_class_is_importable -v`
 Expected: FAIL with `ImportError: cannot import name 'NGSIEMRenderModule'`.
 
-- [ ] **Step 3: Write the skeleton**
+- [ ] **Step 3: Write the skeleton (revised — uses FastMCPApp via add_provider)**
 
 Create `src/crowdstrike_mcp/modules/ngsiem_render/_module.py`:
 
@@ -517,17 +544,28 @@ NGSIEMRenderModule — UI tool that renders NGSIEM query results as Prefab.
 Auto-discovered via registry.py. Holds an internal NGSIEMModule instance
 to share the query engine without depending on auto-discovery instance
 sharing (registry instantiates each module class with cls(client)).
+
+Uses the fastmcp v2 composition pattern: constructs its own FastMCPApp,
+registers UI tools via @app.ui() and @app.tool() on the FastMCPApp, then
+mounts the app onto the main fastmcp.FastMCP server via add_provider().
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from fastmcp.apps import FastMCPApp
+
 from crowdstrike_mcp.modules.base import BaseModule
 from crowdstrike_mcp.modules.ngsiem import NGSIEMModule
 
 if TYPE_CHECKING:
-    from fastmcp.apps import FastMCPApp
+    from fastmcp import FastMCP
+
+
+# Must match the FastMCPApp(name=...) below and the _APP_NAME constant
+# in layout.py — drives the drilldown wire-format hash.
+_APP_NAME = "crowdstrike-falcon"
 
 
 class NGSIEMRenderModule(BaseModule):
@@ -536,27 +574,27 @@ class NGSIEMRenderModule(BaseModule):
     def __init__(self, client):
         super().__init__(client)
         self._ngsiem = NGSIEMModule(client)
+        # Build the FastMCPApp eagerly so the tool decorators run at
+        # construction time, not at register_tools() time. Tools register
+        # against self._app, then self._app gets added as a provider to
+        # the main server in register_tools().
+        self._app = FastMCPApp(_APP_NAME)
+        self._register_app_tools()
         self._log("Initialized")
 
-    def register_tools(self, server: "FastMCPApp") -> None:
-        # Tool methods filled in by Tasks 9 and 10.
-        self._add_tool(
-            server,
-            self.ngsiem_query_render,
-            name="ngsiem_query_render",
-            description=(
-                "Render an NGSIEM/CQL query result as an interactive Prefab UI for the user. "
-                "Use when the user asks to see, view, show, or visualize query results. "
-                "Returns a brief summary plus a stored-response ref_id; call "
-                "get_stored_response(ref_id=...) to inspect specific events."
-            ),
-        )
-        self._add_tool(
-            server,
-            self.ngsiem_query_drilldown,
-            name="ngsiem_query_drilldown",
-            description="Backend tool the UI calls when the user clicks a result row.",
-        )
+    def _register_app_tools(self) -> None:
+        """Register UI tools on self._app (the FastMCPApp). The methods'
+        bodies are placeholders here; Tasks 9 and 10 replace them."""
+        self._app.ui("ngsiem_query_render")(self.ngsiem_query_render)
+        self._app.tool("ngsiem_query_drilldown")(self.ngsiem_query_drilldown)
+        # Track names for visibility (BaseModule.tools list is part of the
+        # registration contract — tests inspect it).
+        self.tools.append("ngsiem_query_render")
+        self.tools.append("ngsiem_query_drilldown")
+
+    def register_tools(self, server: "FastMCP") -> None:
+        """Mount the FastMCPApp onto the main fastmcp.FastMCP server."""
+        server.add_provider(self._app)
 
     async def ngsiem_query_render(self, query: str, start_time: str = "1d", max_results: int = 100):
         """Placeholder — implemented in Task 9."""
@@ -566,6 +604,13 @@ class NGSIEMRenderModule(BaseModule):
         """Placeholder — implemented in Task 10."""
         raise NotImplementedError("Implemented in Task 10")
 ```
+
+**Note on the registration pattern:** This deliberately diverges from
+`BaseModule._add_tool` because `_add_tool` calls `server.tool(...)`
+directly on the main server. Render tools belong on the FastMCPApp
+provider so they ship with the `_meta.fastmcp.app` annotations the
+Prefab renderer expects. Other modules continue using `_add_tool`
+unchanged.
 
 - [ ] **Step 4: Run tests, expect pass**
 
@@ -825,19 +870,28 @@ git commit -m "feat(ngsiem-render): implement ngsiem_query_drilldown inline-row 
 
 ---
 
-## Task 11: Swap server.py to FastMCPApp
+## Task 11: Swap server.py to fastmcp v2 FastMCP + update HTTP transport
 
-**Why:** Spec D5 — adopting FastMCPApp makes `@app.ui()` available and standardizes the path for future UI tools. Gated on Task 1's spike.
+**Why:** Spec D5 (revised post-spike) — switching the main server class
+from `mcp.server.fastmcp.FastMCP` to `fastmcp.FastMCP` v2 unlocks
+`add_provider(FastMCPApp)` for UI-tool composition. Existing modules'
+tool/resource registration paths are preserved by v2 surface
+compatibility. The HTTP-transport surface differs: v2 has a unified
+`http_app(transport=...)` instead of stdlib's `sse_app()` /
+`streamable_http_app()`.
 
 **Files:**
-- Modify: `src/crowdstrike_mcp/server.py:36` (import) and `:79` (instantiation)
+- Modify: `src/crowdstrike_mcp/server.py:36` (import)
+- Modify: `src/crowdstrike_mcp/server.py:79` (instantiation)
+- Modify: `src/crowdstrike_mcp/server.py:120-123` (HTTP transport call)
 
-**Precondition:** Task 1 spike PASSED. If it failed, **STOP** and revisit the spec.
+**Precondition:** Task 1 spike completed (it has — DONE 2026-04-26 with
+verdict "fastmcp v2 viable").
 
 - [ ] **Step 1: Capture baseline tool list**
 
-Run: `pytest tests/test_smoke_tools_list.py -v 2>&1 | tee /tmp/smoke_baseline.txt`
-Expected: PASS. Save the output to compare against post-swap.
+Run: `pytest tests/test_smoke_tools_list.py -v`
+Expected: PASS. Note any reported tool count for comparison post-swap.
 
 - [ ] **Step 2: Update import**
 
@@ -850,38 +904,59 @@ from mcp.server.fastmcp import FastMCP
 Change to:
 
 ```python
-from fastmcp.apps import FastMCPApp
+from fastmcp import FastMCP
 ```
 
-- [ ] **Step 3: Update instantiation**
+(The class name stays `FastMCP` — only the package changes.)
 
-In `src/crowdstrike_mcp/server.py:79`, find:
+- [ ] **Step 3: Update HTTP transport call site**
+
+In `src/crowdstrike_mcp/server.py`, find this block (around line 120):
 
 ```python
-self.server = FastMCP("crowdstrike-falcon")
+if transport_type == "sse":
+    app = self.server.sse_app()
+else:
+    app = self.server.streamable_http_app()
 ```
 
-Change to:
+Replace with:
 
 ```python
-self.server = FastMCPApp("crowdstrike-falcon")
+app = self.server.http_app(transport=transport_type)
 ```
 
-- [ ] **Step 4: Re-run smoke test**
+The v2 API takes `transport` as a parameter. The string values
+(`"sse"`, `"streamable-http"`) match what the CLI's `--transport`
+argument already accepts, so no further changes are needed.
+
+- [ ] **Step 4: No instantiation change needed**
+
+`self.server = FastMCP("crowdstrike-falcon")` stays as-is — only the
+imported class changed.
+
+- [ ] **Step 5: Re-run smoke test**
 
 Run: `pytest tests/test_smoke_tools_list.py -v`
-Expected: PASS — same tools list as baseline. If the test fails on `add_resource` or `resource(uri)`, fall back to spec R1 plan B (this means the spike was incomplete; document and re-spec).
+Expected: PASS, same tool count as baseline.
 
-- [ ] **Step 5: Run full suite**
+If the smoke test fails on tool registration: check for stdlib-specific
+tool/resource API differences. Most likely culprits are
+`server.add_resource(Resource)` calls (none in the codebase per spike
+findings) or `isinstance(server, FastMCP)` checks against the stdlib
+class (none expected). If a real incompatibility surfaces, escalate.
+
+- [ ] **Step 6: Run full suite**
 
 Run: `pytest -x --timeout=30`
-Expected: PASS. Any failure related to FastMCP type hints in modules is a real bug — fix in this task; type hints in `BaseModule.register_tools(server: FastMCP)` are not load-bearing (Python doesn't enforce), but if `isinstance(server, FastMCP)` checks exist anywhere they need to update to accept FastMCPApp too.
+Expected: PASS. Resource-decorator tests, tool-list tests, and module
+registration tests must all still pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/crowdstrike_mcp/server.py
-git commit -m "feat(server): swap FastMCP to FastMCPApp for Prefab UI tool support"
+git commit -m "feat(server): switch to fastmcp v2 FastMCP for add_provider composition"
 ```
 
 ---
