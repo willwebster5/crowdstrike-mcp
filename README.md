@@ -193,6 +193,19 @@ docker run -p 8000:8000 \
 
 The `list_*` tools default to compact projections (id, name, last_modified); pass `detail=true` to get full records. `ngsiem_get_lookup_file` is metadata-only unless `include_content=true`. Every read tool is scoped to `ngsiem:read`; write operations remain with `talonctl`.
 
+### NG-SIEM Render — `modules/ngsiem_render/`
+
+Optional UI variant of `ngsiem_query` for hosts that render MCP Apps (Claude Desktop, Claude.ai). Registers two tools when `prefab_ui` is installed:
+
+| Tool | Description |
+|------|-------------|
+| `ngsiem_query_render` | Run a CQL query and render the result as an interactive Prefab UI (table/chart/metric chosen by query shape). Returns a brief summary plus a `ref_id` the agent can pass to `get_stored_response` to inspect specific events. |
+| `ngsiem_query_drilldown` | Backend tool the rendered DataTable invokes when the user clicks a row; echoes the row dict back. |
+
+**Install:** `pip install -e '.[prefab-render]'` (adds `fastmcp[apps]>=3.2`).
+
+**Dev mode without creds:** set `CROWDSTRIKE_RENDER_MOCK=1` to short-circuit `ngsiem_query_render` to deterministic mock events without calling NG-SIEM.
+
 ### Alerts — `modules/alerts.py`
 
 | Tool | Description |
