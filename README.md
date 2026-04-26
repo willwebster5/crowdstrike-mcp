@@ -207,6 +207,8 @@ Optional UI variant of `ngsiem_query` for hosts that render MCP Apps (Claude Des
 
 **Dev mode without creds:** set `CROWDSTRIKE_RENDER_MOCK=1` to short-circuit `ngsiem_query_render` to deterministic mock events without calling NG-SIEM.
 
+**Browser dev preview** (much faster iteration than restarting Claude Desktop): `fastmcp dev apps scripts/dev_render.py` launches the user MCP server on `:8000` and the Prefab dev UI on `:8080`, opens a browser with a tool picker, and hot-reloads on file changes. The dev script forces `CROWDSTRIKE_RENDER_MOCK=1`, so no NG-SIEM creds are needed.
+
 ### Alerts — `modules/alerts.py`
 
 | Tool | Description |
