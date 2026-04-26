@@ -103,12 +103,6 @@ class BaseModule(ABC):
         server.tool(**kwargs)(method)
         self.tools.append(name)
 
-    def _add_resource(self, server: FastMCP, resource) -> None:
-        """Register an MCP resource and track its URI."""
-        server.add_resource(resource)
-        uri = getattr(resource, "uri", str(resource))
-        self.resources.append(str(uri))
-
     def _log(self, message: str) -> None:
         """Log to stderr for MCP server debugging."""
         print(f"[{self.__class__.__name__}] {message}", file=sys.stderr)
