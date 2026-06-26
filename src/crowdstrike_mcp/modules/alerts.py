@@ -5,7 +5,7 @@ Tools:
   get_alerts             — Retrieve alerts across all detection types with filtering
   alert_analysis         — Deep-dive alert analysis with type-specific enrichment
   ngsiem_alert_analysis  — Alias for alert_analysis (backward compat)
-  update_alert_status    — Update alert status, comments, and tags
+  update_alert_status    — Update alert status, comments, tags, and user assignment
 
 Cross-module dependency: AlertsModule creates its own NGSIEM service
 instance using ``self.client.auth_object`` instead of depending on other modules.
@@ -96,7 +96,7 @@ class AlertsModule(BaseModule):
             server,
             self.update_alert_status,
             name="update_alert_status",
-            description=("Update CrowdStrike alert status after triage/investigation. Supports status changes, comments for audit trail, and tags."),
+            description=("Update CrowdStrike alert status after triage/investigation. Supports status changes, comments for audit trail, tags, and assigning/unassigning a user (by user ID / email). Status is optional, so the tool can reassign without changing status."),
             tier="write",
         )
 
