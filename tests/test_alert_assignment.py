@@ -47,9 +47,7 @@ def test_assign_only_emits_assign_action_no_status(alerts_module):
     m = alerts_module._mock_alerts
     m.update_alerts_v3.return_value = _resp(200, {"meta": {"writes": {"resources_affected": 1}}})
 
-    out = asyncio.run(
-        alerts_module.update_alert_status([NG], assign_to_user_id="analyst@example.com")
-    )
+    out = asyncio.run(alerts_module.update_alert_status([NG], assign_to_user_id="analyst@example.com"))
 
     params = _action_params(m)
     assert {"name": "assign_to_user_id", "value": "analyst@example.com"} in params
@@ -73,11 +71,7 @@ def test_status_comment_and_assign_combined(alerts_module):
     m = alerts_module._mock_alerts
     m.update_alerts_v3.return_value = _resp(200, {"meta": {"writes": {"resources_affected": 1}}})
 
-    out = asyncio.run(
-        alerts_module.update_alert_status(
-            [NG], status="in_progress", comment="triaging", assign_to_user_id="analyst@example.com"
-        )
-    )
+    out = asyncio.run(alerts_module.update_alert_status([NG], status="in_progress", comment="triaging", assign_to_user_id="analyst@example.com"))
 
     names = [p["name"] for p in _action_params(m)]
     assert names == ["update_status", "append_comment", "assign_to_user_id"]
@@ -88,11 +82,7 @@ def test_status_comment_and_assign_combined(alerts_module):
 def test_assign_and_unassign_together_is_error(alerts_module):
     m = alerts_module._mock_alerts
 
-    out = asyncio.run(
-        alerts_module.update_alert_status(
-            [NG], assign_to_user_id="analyst@example.com", unassign=True
-        )
-    )
+    out = asyncio.run(alerts_module.update_alert_status([NG], assign_to_user_id="analyst@example.com", unassign=True))
 
     assert "mutually exclusive" in out.lower()
     m.update_alerts_v3.assert_not_called()
