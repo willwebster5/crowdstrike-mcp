@@ -200,7 +200,7 @@ The `list_*` tools default to compact projections (id, name, last_modified); pas
 | `get_alerts` | Retrieve alerts across all detection types with filtering |
 | `alert_analysis` | Deep-dive analysis with MITRE ATT&CK context and related events |
 | `ngsiem_alert_analysis` | Alias for `alert_analysis` |
-| `update_alert_status` | Change alert status, add comments and tags |
+| `update_alert_status` | Change alert status, add comments and tags, assign/unassign a user (by user ID / email) |
 
 **Detection types supported:** Endpoint (`ind`), NG-SIEM (`ngsiem`), Cloud Security (`fcs`), Identity (`ldt`), Third-party (`thirdparty`)
 
@@ -527,7 +527,7 @@ These tools require `--allow-writes` to be visible:
 
 | Tool | Module | What it does |
 |------|--------|-------------|
-| `update_alert_status` | alerts | Change alert status, add comments/tags |
+| `update_alert_status` | alerts | Change alert status, add comments/tags, assign/unassign a user (by user ID / email) |
 | `correlation_update_rule` | correlation | Enable/disable detection rules |
 | `correlation_import_to_iac` | correlation | Export rules to IaC YAML |
 | `host_contain` | response | Network-isolate a host |
