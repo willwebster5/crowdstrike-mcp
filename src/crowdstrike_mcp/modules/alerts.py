@@ -96,7 +96,11 @@ class AlertsModule(BaseModule):
             server,
             self.update_alert_status,
             name="update_alert_status",
-            description=("Update CrowdStrike alert status after triage/investigation. Supports status changes, comments for audit trail, tags, and assigning/unassigning a user (by user ID / email). Status is optional, so the tool can reassign without changing status."),
+            description=(
+                "Update CrowdStrike alert status after triage/investigation. Supports status changes, "
+                "comments for audit trail, tags, and assigning/unassigning a user (by user ID / email). "
+                "Status is optional, so the tool can reassign without changing status."
+            ),
             tier="write",
         )
 
@@ -215,7 +219,7 @@ class AlertsModule(BaseModule):
     async def update_alert_status(
         self,
         composite_ids: Annotated[list[str], "List of composite alert IDs to update"],
-        status: Annotated[Optional[str], "New alert status ('new', 'in_progress', 'closed', 'reopened'). Optional — omit to leave status unchanged."] = None,
+        status: Annotated[Optional[str], "New alert status ('new', 'in_progress', 'closed', 'reopened'). Optional — omit to leave unchanged."] = None,
         comment: Annotated[Optional[str], "Comment for audit trail"] = None,
         tags: Annotated[Optional[list[str]], "Tags to add"] = None,
         assign_to_user_id: Annotated[Optional[str], "User ID / email to assign the alert to, e.g. 'analyst@example.com'"] = None,
@@ -223,9 +227,7 @@ class AlertsModule(BaseModule):
     ) -> str:
         """Update alert status, comments, tags, and assignment."""
         cleaned_ids = [extract_detection_id(cid) for cid in composite_ids]
-        result = self._update_alert_status(
-            cleaned_ids, status, comment, tags, assign_to_user_id, unassign
-        )
+        result = self._update_alert_status(cleaned_ids, status, comment, tags, assign_to_user_id, unassign)
 
         if not result.get("success"):
             return format_text_response(
