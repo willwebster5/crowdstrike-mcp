@@ -215,13 +215,17 @@ class AlertsModule(BaseModule):
     async def update_alert_status(
         self,
         composite_ids: Annotated[list[str], "List of composite alert IDs to update"],
-        status: Annotated[str, "New alert status ('new', 'in_progress', 'closed', 'reopened')"],
+        status: Annotated[Optional[str], "New alert status ('new', 'in_progress', 'closed', 'reopened'). Optional — omit to leave status unchanged."] = None,
         comment: Annotated[Optional[str], "Comment for audit trail"] = None,
         tags: Annotated[Optional[list[str]], "Tags to add"] = None,
+        assign_to_user_id: Annotated[Optional[str], "User ID / email to assign the alert to, e.g. 'analyst@example.com'"] = None,
+        unassign: Annotated[bool, "Clear the current assignee. Mutually exclusive with assign_to_user_id."] = False,
     ) -> str:
-        """Update alert status, add comments and tags."""
+        """Update alert status, comments, tags, and assignment."""
         cleaned_ids = [extract_detection_id(cid) for cid in composite_ids]
-        result = self._update_alert_status(cleaned_ids, status, comment, tags)
+        result = self._update_alert_status(
+            cleaned_ids, status, comment, tags, assign_to_user_id, unassign
+        )
 
         if not result.get("success"):
             return format_text_response(
@@ -229,14 +233,17 @@ class AlertsModule(BaseModule):
                 raw=True,
             )
 
-        lines = [
-            f"Successfully updated {result['updated_count']} alert(s)",
-            f"New status: {result['new_status']}",
-        ]
+        lines = [f"Successfully updated {result['updated_count']} alert(s)"]
+        if result.get("new_status"):
+            lines.append(f"New status: {result['new_status']}")
         if result.get("comment_added"):
             lines.append(f"Comment added: {comment}")
         if result.get("tags_added"):
             lines.append(f"Tags added: {', '.join(result['tags_added'])}")
+        if result.get("assigned_to"):
+            lines.append(f"Assigned to: {result['assigned_to']}")
+        if result.get("unassigned"):
+            lines.append("Unassigned")
         if result.get("spurious_500_verified"):
             # Issue #21: CrowdStrike's update_alerts_v3 returns a bogus HTTP 500
             # for product=thirdparty IDs even though the write is applied.
@@ -402,18 +409,31 @@ class AlertsModule(BaseModule):
         except Exception as e:
             return {"success": False, "error": f"Error retrieving alerts: {str(e)}"}
 
-    def _update_alert_status(self, composite_ids, status, comment=None, tags=None):
+    def _update_alert_status(self, composite_ids, status=None, comment=None, tags=None, assign_to_user_id=None, unassign=False):
         try:
             alerts = self._service(Alerts)
-            valid_statuses = ["new", "in_progress", "closed", "reopened"]
-            if status.lower() not in valid_statuses:
-                return {"success": False, "error": f"Invalid status: {status}. Must be one of: {valid_statuses}"}
 
-            action_params = [{"name": "update_status", "value": status.lower()}]
+            if assign_to_user_id and unassign:
+                return {"success": False, "error": "assign_to_user_id and unassign are mutually exclusive; provide only one."}
+
+            if not any([status, comment, tags, assign_to_user_id, unassign]):
+                return {"success": False, "error": "No action provided: supply at least one of status, comment, tags, assign_to_user_id, or unassign."}
+
+            action_params = []
+            if status:
+                valid_statuses = ["new", "in_progress", "closed", "reopened"]
+                if status.lower() not in valid_statuses:
+                    return {"success": False, "error": f"Invalid status: {status}. Must be one of: {valid_statuses}"}
+                action_params.append({"name": "update_status", "value": status.lower()})
             if comment:
                 action_params.append({"name": "append_comment", "value": comment})
             if tags:
                 action_params.extend({"name": "add_tag", "value": tag} for tag in tags)
+            if assign_to_user_id:
+                action_params.append({"name": "assign_to_user_id", "value": assign_to_user_id})
+            elif unassign:
+                # CrowdStrike API: the value passed to `unassign` is ignored.
+                action_params.append({"name": "unassign", "value": ""})
 
             response = alerts.update_alerts_v3(
                 composite_ids=composite_ids,
@@ -429,6 +449,7 @@ class AlertsModule(BaseModule):
                 # genuine errors for other products are never masked.
                 if (
                     response["status_code"] == 500
+                    and status
                     and composite_ids
                     and all(parse_composite_id(c)["product_type"] == "thirdparty" for c in composite_ids)
                     and self._verify_status_applied(alerts, composite_ids, status.lower())
@@ -440,9 +461,11 @@ class AlertsModule(BaseModule):
             return {
                 "success": True,
                 "updated_count": len(composite_ids),
-                "new_status": status.lower(),
+                "new_status": status.lower() if status else None,
                 "comment_added": comment is not None,
                 "tags_added": tags or [],
+                "assigned_to": assign_to_user_id,
+                "unassigned": bool(unassign),
                 "spurious_500_verified": spurious_500_verified,
             }
         except Exception as e:
