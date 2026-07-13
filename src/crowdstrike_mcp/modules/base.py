@@ -56,10 +56,21 @@ class BaseModule(ABC):
         In HTTP mode, session_auth_middleware sets _session_client ContextVar
         per-request. In stdio mode, the ContextVar is unset and we fall back
         to the instance-level client passed at construction.
+
+        In HTTP mode an unauthenticated request reaches the app with the
+        ContextVar unset (the handshake needs no credentials). Reaching here in
+        that state means a tool was actually invoked, so fail with a message the
+        caller can act on.
         """
         session = _session_client.get()
         if session is not None:
             return session.auth_object
+        if getattr(self.client, "_deferred", False):
+            raise RuntimeError(
+                "CrowdStrike credentials were not supplied for this session. Send "
+                "X-Falcon-Client-Id and X-Falcon-Client-Secret headers, or configure "
+                "FALCON_CLIENT_ID and FALCON_CLIENT_SECRET in your client's connection settings."
+            )
         return self.client.auth_object
 
     def _service(self, cls):

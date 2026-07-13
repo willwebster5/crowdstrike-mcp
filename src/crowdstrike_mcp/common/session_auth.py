@@ -6,6 +6,7 @@ via OAuth2, caches sessions, and sets a ContextVar for per-request isolation.
 """
 
 import hashlib
+import os
 import sys
 import time
 
@@ -43,12 +44,27 @@ def _evict_lru():
 
 
 def _extract_headers(scope) -> tuple[str | None, str | None, str | None]:
-    """Extract Falcon credential headers from ASGI scope."""
+    """Extract Falcon credential headers from ASGI scope.
+
+    Native headers (X-Falcon-*) take precedence. As a fallback, credentials may
+    arrive as prefixed env headers: MCP gateways commonly forward each per-user
+    env var as ``<prefix><VAR_NAME>``. Set FALCON_MCP_ENV_HEADER_PREFIX to the
+    gateway's prefix to read them.
+    """
     headers = dict((k.decode("latin-1").lower(), v.decode("latin-1")) for k, v in scope.get("headers", []))
+
+    prefix = os.environ.get("FALCON_MCP_ENV_HEADER_PREFIX", "").lower()
+
+    def _get(native: str, env_var: str) -> str | None:
+        value = headers.get(native)
+        if not value and prefix:
+            value = headers.get(f"{prefix}{env_var.lower()}")
+        return value
+
     return (
-        headers.get("x-falcon-client-id"),
-        headers.get("x-falcon-client-secret"),
-        headers.get("x-falcon-base-url"),
+        _get("x-falcon-client-id", "FALCON_CLIENT_ID"),
+        _get("x-falcon-client-secret", "FALCON_CLIENT_SECRET"),
+        _get("x-falcon-base-url", "FALCON_BASE_URL"),
     )
 
 
@@ -58,6 +74,13 @@ def session_auth_middleware(app):
     Extracts X-Falcon-Client-Id, X-Falcon-Client-Secret, and X-Falcon-Base-Url
     from request headers. Authenticates via OAuth2, caches the session, and
     sets the _session_client ContextVar for the request duration.
+
+    Requests without credentials pass through unauthenticated, leaving the
+    ContextVar unset. This is required: the MCP handshake (initialize,
+    tools/list) is exercised by health probes before any user has connected,
+    and those calls need no Falcon access. Tool invocations resolve the client
+    lazily and raise if it is missing. Use --api-key to gate a directly
+    exposed server.
     """
 
     async def middleware(scope, receive, send):
@@ -68,11 +91,7 @@ def session_auth_middleware(app):
         client_id, client_secret, base_url = _extract_headers(scope)
 
         if not client_id or not client_secret:
-            response = JSONResponse(
-                {"error": "Missing required headers: X-Falcon-Client-Id, X-Falcon-Client-Secret"},
-                status_code=401,
-            )
-            await response(scope, receive, send)
+            await app(scope, receive, send)
             return
 
         base_url = base_url or "US1"
