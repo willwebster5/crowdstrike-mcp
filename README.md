@@ -414,8 +414,26 @@ crowdstrike-mcp [OPTIONS]
 | `--host` | `FALCON_MCP_HOST` | `127.0.0.1` | HTTP bind address |
 | `--port` | `FALCON_MCP_PORT` | `8000` | HTTP port |
 | `--api-key` | `FALCON_MCP_API_KEY` | — | API key for HTTP auth |
+| — | `FALCON_MCP_ENV_HEADER_PREFIX` | — | Also read Falcon credentials from `<prefix>FALCON_CLIENT_ID` / `<prefix>FALCON_CLIENT_SECRET` request headers (see [Running behind an MCP gateway](#running-behind-an-mcp-gateway)) |
 | — | `FALCON_MCP_NGSIEM_TIMEOUT` | `300` | Max seconds to poll for an `ngsiem_query` search job before timing out |
 | — | `FALCON_MCP_NGSIEM_POLL_INTERVAL` | `2` | Seconds between `ngsiem_query` search-status polls |
+
+### Running behind an MCP gateway
+
+On the HTTP transports the server takes Falcon credentials **per request**, so one
+process can serve many users, each acting as themselves.
+
+Credentials are read from `X-Falcon-Client-Id` / `X-Falcon-Client-Secret` (and
+optionally `X-Falcon-Base-Url`). Gateways that inject each user's env vars as
+prefixed headers instead are supported: set `FALCON_MCP_ENV_HEADER_PREFIX` to the
+gateway's prefix and the server will also accept `<prefix>FALCON_CLIENT_ID` and
+`<prefix>FALCON_CLIENT_SECRET`. Native `X-Falcon-*` headers win when both are sent.
+
+A request that carries no credentials is **not** rejected: the MCP handshake
+(`initialize`, `tools/list`) is exercised by gateway health probes before any user
+has connected, and needs no Falcon access. Credentials are resolved lazily, so
+invoking a tool without them returns an actionable error. When exposing the server
+directly rather than behind a gateway, gate it with `--api-key`.
 
 ### Selective Module Loading
 
