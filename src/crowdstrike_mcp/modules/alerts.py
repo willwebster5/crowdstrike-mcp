@@ -102,6 +102,7 @@ class AlertsModule(BaseModule):
                 "Status is optional, so the tool can reassign without changing status."
             ),
             tier="write",
+            idempotent=True,
         )
 
     # ------------------------------------------------------------------
