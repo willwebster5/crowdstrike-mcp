@@ -415,6 +415,7 @@ crowdstrike-mcp [OPTIONS]
 | `--port` | `FALCON_MCP_PORT` | `8000` | HTTP port |
 | `--api-key` | `FALCON_MCP_API_KEY` | — | API key for HTTP auth |
 | — | `FALCON_MCP_ENV_HEADER_PREFIX` | — | Also read Falcon credentials from `<prefix>FALCON_CLIENT_ID` / `<prefix>FALCON_CLIENT_SECRET` request headers (see [Running behind an MCP gateway](#running-behind-an-mcp-gateway)) |
+| — | `FALCON_MCP_ALLOWED_HOSTS` | — | HTTP only. Allowed `Host` header values for the MCP SDK's DNS-rebinding protection. Comma-separated (entries may use the `host:*` port-wildcard form), or `*` to disable the check. Leave unset for the SDK default (see [Running behind an MCP gateway](#running-behind-an-mcp-gateway)) |
 | — | `FALCON_MCP_NGSIEM_TIMEOUT` | `300` | Max seconds to poll for an `ngsiem_query` search job before timing out |
 | — | `FALCON_MCP_NGSIEM_POLL_INTERVAL` | `2` | Seconds between `ngsiem_query` search-status polls |
 
@@ -434,6 +435,14 @@ A request that carries no credentials is **not** rejected: the MCP handshake
 has connected, and needs no Falcon access. Credentials are resolved lazily, so
 invoking a tool without them returns an actionable error. When exposing the server
 directly rather than behind a gateway, gate it with `--api-key`.
+
+**Host header.** The MCP SDK's streamable-HTTP transport applies DNS-rebinding
+protection, rejecting any `Host` header other than localhost with **HTTP 421**. A
+gateway or reverse proxy reaches the server on an internal hostname, which trips
+this and leaves the connector unable to start. Set `FALCON_MCP_ALLOWED_HOSTS` to
+the host(s) it will be reached on, or to `*` to disable the check when the server
+sits behind a proxy that already controls access. It is unset by default, so
+direct users keep the SDK's protection.
 
 ### Selective Module Loading
 

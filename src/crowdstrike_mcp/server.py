@@ -34,9 +34,39 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from crowdstrike_mcp.client import FalconClient
 from crowdstrike_mcp.registry import get_available_modules
+
+
+def _transport_security_from_env() -> TransportSecuritySettings | None:
+    """Build MCP transport-security settings from FALCON_MCP_ALLOWED_HOSTS.
+
+    The MCP SDK's streamable-HTTP transport validates the Host header for DNS
+    rebinding protection, rejecting anything but localhost with HTTP 421 unless
+    the accepted hosts are configured. That breaks HTTP deployments behind a
+    reverse proxy or gateway, which reach the server on an internal hostname.
+
+    - unset  → return None, i.e. keep the SDK's own default (protection on).
+    - "*"    → disable Host/Origin validation. Use only when the server is not
+               directly reachable — e.g. behind a proxy that owns access control.
+    - a list → enable protection and allow exactly those Host values. Entries
+               support the SDK's "host:*" port-wildcard form.
+
+    Only affects HTTP transports; ignored under stdio.
+    """
+    raw = os.environ.get("FALCON_MCP_ALLOWED_HOSTS", "").strip()
+    if not raw:
+        return None
+    if raw == "*":
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    hosts = [h.strip() for h in raw.split(",") if h.strip()]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=hosts,
+    )
 
 
 class FalconMCPServer:
@@ -76,7 +106,7 @@ class FalconMCPServer:
             self._log("HTTP mode: server is credential-less, per-client auth via headers")
 
         # Create FastMCP server
-        self.server = FastMCP("crowdstrike-falcon")
+        self.server = FastMCP("crowdstrike-falcon", transport_security=_transport_security_from_env())
 
         # Discover and register modules
         self._modules = get_available_modules(
