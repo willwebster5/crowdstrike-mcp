@@ -73,6 +73,7 @@ class ResponseModule(BaseModule):
                 "Respects do-not-contain exclusion list."
             ),
             tier="write",
+            destructive=True,
         )
         self._add_tool(
             server,
@@ -80,6 +81,7 @@ class ResponseModule(BaseModule):
             name="host_lift_containment",
             description=("TIER 2: Lift network isolation from a contained host. First call returns a preview. Call again with confirm=True to execute."),
             tier="write",
+            idempotent=True,
         )
 
     # ------------------------------------------------------------------

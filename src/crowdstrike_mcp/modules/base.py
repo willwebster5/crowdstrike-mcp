@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Callable
 
+from mcp.types import ToolAnnotations
+
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
@@ -89,6 +91,8 @@ class BaseModule(ABC):
         name: str,
         description: str | None = None,
         tier: str = "read",
+        destructive: bool = False,
+        idempotent: bool = False,
     ) -> None:
         """Register a tool function with the server and track it.
 
@@ -99,6 +103,11 @@ class BaseModule(ABC):
             description: Optional tool description override.
             tier: Permission tier — ``"read"`` (default) or ``"write"``.
                   Write tools are skipped when ``allow_writes`` is False.
+            destructive: For write tools, hint that the operation may be
+                  disruptive or hard to undo (e.g. containing a host). Ignored
+                  for read tools, where it is not meaningful.
+            idempotent: Hint that repeating the call with the same arguments
+                  has no additional effect (e.g. setting a status).
 
         Raises:
             ValueError: If ``tier`` is not a valid value.
@@ -108,11 +117,28 @@ class BaseModule(ABC):
         if tier == "write" and not self.allow_writes:
             self._log(f"Skipping write tool '{name}' (allow_writes=False)")
             return
-        kwargs = {"name": name}
+        kwargs = {"name": name, "annotations": self._annotations(name, tier, destructive, idempotent)}
         if description:
             kwargs["description"] = description
         server.tool(**kwargs)(method)
         self.tools.append(name)
+
+    @staticmethod
+    def _annotations(name: str, tier: str, destructive: bool, idempotent: bool) -> ToolAnnotations:
+        """Build standard MCP hints from a tool's tier and flags.
+
+        Every tool calls the external Falcon API, so ``openWorldHint`` is always
+        true. ``readOnlyHint`` follows the tier. ``destructiveHint`` only applies
+        to write tools (the spec defines it relative to non-read-only tools).
+        """
+        read_only = tier == "read"
+        return ToolAnnotations(
+            title=name,
+            readOnlyHint=read_only,
+            destructiveHint=(destructive if not read_only else None),
+            idempotentHint=(idempotent or None),
+            openWorldHint=True,
+        )
 
     def _add_resource(self, server: FastMCP, resource) -> None:
         """Register an MCP resource and track its URI."""
