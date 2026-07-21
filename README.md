@@ -275,11 +275,11 @@ Each alert analysis routes to type-specific enrichment:
 | `rtr_pulse_session` | Keep-alive ping (resets 10-min idle timeout) |
 | `rtr_execute_command` | Run an allowlisted read-only active-responder command |
 | `rtr_check_command_status` | Poll submitted command for stdout/stderr |
-| `rtr_list_files` | List files pulled via `getfile` |
+| `rtr_list_files` | List files pulled via `get` |
 | `rtr_get_extracted_file_contents` | Download a pulled file (7z, password `infected`) |
 
 All RTR tools register as read-tier. Safety is enforced by a hardcoded MCP-layer
-command allowlist (`ls, ps, reg query, getfile, cat, env, ipconfig, netstat, cd,
+command allowlist (`ls, ps, reg query, get, cat, env, ipconfig, netstat, cd,
 pwd, filehash, eventlog view, zip, mount, users, history, memdump`) plus a
 never-allowed deny list (`cp, mv, rm, put, runscript, kill, mkdir`). Extend via
 env var `CROWDSTRIKE_MCP_RTR_EXTRA_ALLOWED` (comma-separated) — deny list always
