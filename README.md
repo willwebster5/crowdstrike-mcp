@@ -213,7 +213,7 @@ Each alert analysis routes to type-specific enrichment:
 
 | Tool | Description |
 |------|-------------|
-| `host_lookup` | Device details: OS, agent version, containment status, policies |
+| `host_lookup` | Device details: OS, agent version, containment status, policies, recent login users |
 | `host_login_history` | Recent login events for a device |
 | `host_network_history` | Network address history for a device |
 
