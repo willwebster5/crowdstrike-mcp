@@ -2,7 +2,7 @@
 Hosts Module — device context lookups via the Hosts API.
 
 Tools:
-  host_lookup         — Look up device details by hostname or device_id
+  host_lookup         — Look up device details (+ recent login users) by hostname or device_id
   host_login_history  — Get recent login events for a device
   host_network_history — Get network address history for a device
 """
@@ -54,7 +54,11 @@ class HostsModule(BaseModule):
             server,
             self.host_lookup,
             name="host_lookup",
-            description=("Look up device details: OS, last seen, containment status, policies, agent version. Search by hostname or device_id."),
+            description=(
+                "Look up device details: OS, last seen, containment status, policies, agent version, "
+                "plus the most recent login user and up to 3 recent distinct users. "
+                "Search by hostname or device_id."
+            ),
         )
         self._add_tool(
             server,
@@ -91,6 +95,11 @@ class HostsModule(BaseModule):
         lines = [f"Host Lookup Results ({result['count']} devices)", ""]
 
         for device in devices:
+            # Enrich with recent login users (#44). Never fail the lookup on this.
+            users = self._resolve_recent_users(device.get("device_id"))
+            device["recent_users"] = users
+            device["most_recent_user"] = users[0] if users else None
+
             lines.append(f"### {device.get('hostname', 'Unknown')}")
             lines.append(f"- Device ID: {device.get('device_id', 'N/A')}")
             lines.append(f"- Platform: {device.get('platform_name', 'N/A')}")
@@ -106,6 +115,13 @@ class HostsModule(BaseModule):
                 lines.append(f"- Domain: {device['machine_domain']}")
             if device.get("tags"):
                 lines.append(f"- Tags: {', '.join(device['tags'])}")
+            if users:
+                mru = users[0]
+                when = f" ({mru['login_time']})" if mru.get("login_time") else ""
+                lines.append(f"- Most Recent User: {mru['user_name']}{when}")
+                lines.append(f"- Recent Users: {', '.join(u['user_name'] for u in users)}")
+            else:
+                lines.append("- Recent Users: (none available)")
             policies = device.get("device_policies", {})
             if policies:
                 lines.append("- Policies:")
@@ -114,7 +130,13 @@ class HostsModule(BaseModule):
                         lines.append(f"  - {ptype}: applied={pdata.get('applied', 'N/A')}")
             lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="host_lookup",
+            raw=True,
+            structured_data={"devices": devices, "count": result.get("count")},
+            metadata={"hostname": hostname, "device_id": device_id, "count": result.get("count")},
+        )
 
     async def host_login_history(
         self,
@@ -246,6 +268,58 @@ class HostsModule(BaseModule):
             return {"success": True, "devices": devices, "count": len(devices)}
         except Exception as e:
             return {"success": False, "error": f"Error looking up host: {str(e)}"}
+
+    # Cap on unique recent users surfaced by host_lookup (#44).
+    _MAX_RECENT_USERS = 3
+
+    def _resolve_recent_users(self, device_id):
+        """Best-effort recent-user enrichment for host_lookup.
+
+        Returns a deduped list of recent users, or ``[]`` on any failure — the
+        core host lookup must never fail because login history was unavailable.
+        """
+        if not device_id:
+            return []
+        hist = self._get_login_history(device_id)
+        if not hist.get("success"):
+            return []
+        return self._extract_recent_users(hist.get("login_history"))
+
+    @staticmethod
+    def _extract_recent_users(login_resources):
+        """Normalize device-login-history resources into deduped recent users.
+
+        Accepts either the wrapped API shape (records carrying a ``recent_logins``
+        list) or a flat list of login records. Preserves most-recent-first order,
+        dedupes by ``user_name`` case-insensitively (first occurrence wins) so a
+        repeated system account collapses to one, and caps at ``_MAX_RECENT_USERS``.
+        """
+        if not login_resources:
+            return []
+        logins = []
+        for res in login_resources:
+            if not isinstance(res, dict):
+                continue
+            recent = res.get("recent_logins")
+            if isinstance(recent, list):
+                logins.extend(r for r in recent if isinstance(r, dict))
+            elif res.get("user_name") is not None:
+                logins.append(res)
+
+        users = []
+        seen = set()
+        for entry in logins:
+            name = entry.get("user_name")
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            users.append({"user_name": name, "login_time": entry.get("login_time")})
+            if len(users) >= HostsModule._MAX_RECENT_USERS:
+                break
+        return users
 
     def _get_login_history(self, device_id):
         try:
