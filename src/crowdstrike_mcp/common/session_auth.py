@@ -16,6 +16,7 @@ from crowdstrike_mcp.client import FalconClient
 from crowdstrike_mcp.modules.base import _session_client
 from crowdstrike_mcp.response_store import (
     ResponseStore,
+    make_session_key,
     reset_response_session,
     set_response_session,
 )
@@ -25,6 +26,10 @@ _client_cache: dict[str, tuple[FalconClient, float]] = {}
 _CACHE_TTL = 25 * 60  # 25 minutes (inside CrowdStrike's 30-min token window)
 _CACHE_MAX = 100
 
+# Per-connection id issued by the stateful streamable-HTTP transport (MCP spec).
+# Absent on the initialize request, on SSE, and in stateless mode.
+_MCP_SESSION_ID_HEADER = "mcp-session-id"
+
 
 def _evict_stale():
     """Remove expired entries from the client cache, dropping their stored responses too."""
@@ -32,7 +37,7 @@ def _evict_stale():
     expired = [k for k, (_, ts) in _client_cache.items() if now - ts > _CACHE_TTL]
     for k in expired:
         del _client_cache[k]
-        ResponseStore.clear_session(k)
+        ResponseStore.clear_credential_sessions(k)
 
 
 def _evict_lru():
@@ -40,19 +45,22 @@ def _evict_lru():
     if len(_client_cache) >= _CACHE_MAX:
         oldest_key = min(_client_cache, key=lambda k: _client_cache[k][1])
         del _client_cache[oldest_key]
-        ResponseStore.clear_session(oldest_key)
+        ResponseStore.clear_credential_sessions(oldest_key)
 
 
-def _extract_headers(scope) -> tuple[str | None, str | None, str | None]:
-    """Extract Falcon credential headers from ASGI scope.
+def _parse_headers(scope) -> dict[str, str]:
+    """Lower-cased header map from an ASGI scope."""
+    return {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+
+
+def _extract_headers(headers: dict[str, str]) -> tuple[str | None, str | None, str | None]:
+    """Extract Falcon credentials from a parsed header map.
 
     Native headers (X-Falcon-*) take precedence. As a fallback, credentials may
     arrive as prefixed env headers: MCP gateways commonly forward each per-user
     env var as ``<prefix><VAR_NAME>``. Set FALCON_MCP_ENV_HEADER_PREFIX to the
     gateway's prefix to read them.
     """
-    headers = dict((k.decode("latin-1").lower(), v.decode("latin-1")) for k, v in scope.get("headers", []))
-
     prefix = os.environ.get("FALCON_MCP_ENV_HEADER_PREFIX", "").lower()
 
     def _get(native: str, env_var: str) -> str | None:
@@ -88,7 +96,8 @@ def session_auth_middleware(app):
             await app(scope, receive, send)
             return
 
-        client_id, client_secret, base_url = _extract_headers(scope)
+        headers = _parse_headers(scope)
+        client_id, client_secret, base_url = _extract_headers(headers)
 
         if not client_id or not client_secret:
             await app(scope, receive, send)
@@ -125,10 +134,15 @@ def session_auth_middleware(app):
                 return
 
         # Set ContextVars for this request. The response store is partitioned by
-        # the same opaque per-credential key so one tenant cannot read another's
-        # stored responses via predictable ref_ids.
+        # credential *and* MCP connection: the credential key keeps one tenant
+        # from reading another's stored responses via predictable ref_ids, and
+        # the mcp-session-id keeps a single user's concurrent connections (e.g.
+        # several projects on one Falcon credential) from sharing a ref
+        # namespace / LRU budget. Falls back to the credential key when no
+        # connection id is present (initialize, SSE, stateless).
+        store_key = make_session_key(cache_key, headers.get(_MCP_SESSION_ID_HEADER))
         token = _session_client.set(cached_client)
-        store_token = set_response_session(cache_key)
+        store_token = set_response_session(store_key)
         try:
             await app(scope, receive, send)
         finally:
