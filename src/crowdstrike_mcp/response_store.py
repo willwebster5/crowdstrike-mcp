@@ -10,7 +10,10 @@ direction clean: utils.py imports from here, modules import from utils.py.
 Isolation: the store is partitioned per session. In HTTP transports a single
 process serves many authenticated tenants, so a process-global store would let
 one tenant read another's stored Falcon data via predictable ref_ids. The
-session id is set per request by session_auth_middleware; stdio (single client)
+session key is set per request by session_auth_middleware and combines the
+credential (cross-tenant isolation) with the MCP connection id when present
+(so one user's concurrent connections — e.g. several projects sharing a Falcon
+credential — don't share a ref namespace or LRU budget). stdio (single client)
 uses the default session. All access is guarded by a lock since FastMCP runs
 sync tool bodies in a worker threadpool.
 """
@@ -27,6 +30,24 @@ from datetime import datetime, timezone
 # stdio and tests use the default single-session value.
 _DEFAULT_SESSION = "local"
 _session_id: ContextVar[str] = ContextVar("response_store_session", default=_DEFAULT_SESSION)
+
+# Separator joining a credential key to an MCP connection id in a partition key.
+# The credential key is a fixed-length sha256 hex digest, so this separator is
+# always unambiguous for the prefix scan in clear_credential_sessions.
+_CONNECTION_SEP = "|"
+
+
+def make_session_key(cred_key: str, connection_id: str | None) -> str:
+    """Build a response-store partition key.
+
+    Per-connection when a stable connection id is available (so a single user's
+    concurrent projects don't share one ref namespace / LRU budget), else the
+    bare credential key — the backward-compatible partition for stdio, SSE, and
+    stateless HTTP, which have no ``mcp-session-id``.
+    """
+    if connection_id:
+        return f"{cred_key}{_CONNECTION_SEP}{connection_id}"
+    return cred_key
 
 
 def set_response_session(session_id: str) -> Token:
@@ -193,6 +214,22 @@ class ResponseStore:
         with cls._lock:
             cls._sessions.pop(session_id, None)
             cls._counters.pop(session_id, None)
+
+    @classmethod
+    def clear_credential_sessions(cls, cred_key: str) -> None:
+        """Drop every partition owned by a credential.
+
+        Clears the bare credential partition and all per-connection
+        sub-partitions (``cred_key|<connection id>``). Called when a credential's
+        auth session is evicted so its stored Falcon data doesn't outlive it,
+        regardless of how many connections were open under it.
+        """
+        with cls._lock:
+            prefix = f"{cred_key}{_CONNECTION_SEP}"
+            owned = [sk for sk in cls._sessions if sk == cred_key or sk.startswith(prefix)]
+            for sk in owned:
+                cls._sessions.pop(sk, None)
+                cls._counters.pop(sk, None)
 
     @classmethod
     def _is_expired(cls, sr: StoredResponse) -> bool:
