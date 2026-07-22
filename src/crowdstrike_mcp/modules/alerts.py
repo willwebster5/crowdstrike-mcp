@@ -15,7 +15,9 @@ They all share the same OAuth2 token.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import re
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -711,6 +713,66 @@ class AlertsModule(BaseModule):
         except Exception as e:
             return {"success": False, "error": f"NGSIEM endpoint enrichment error: {str(e)}"}
 
+    # IOC fields carried forward from the legacy Detects schema into Alerts v2.
+    _IOC_FIELDS = ("ioc_type", "ioc_value", "ioc_source", "ioc_description", "ioc_context")
+
+    @staticmethod
+    def _iter_scalar_strings(value):
+        """Yield every string scalar within a value, recursing lists/dicts."""
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for v in value.values():
+                yield from AlertsModule._iter_scalar_strings(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                yield from AlertsModule._iter_scalar_strings(v)
+
+    @staticmethod
+    def _public_ips_in(text):
+        """Return public (globally-routable) IPv4/IPv6 addresses embedded in text.
+
+        Private/loopback/link-local addresses and non-IP hex tokens (e.g. 32-char
+        agent/customer ids) are excluded so host telemetry can't masquerade as a
+        triggering indicator.
+        """
+        found = []
+        for token in re.findall(r"[0-9A-Fa-f:.]{7,45}", text):
+            try:
+                ip = ipaddress.ip_address(token.strip(".:"))
+            except ValueError:
+                continue
+            if ip.is_global:
+                found.append(str(ip))
+        return found
+
+    @staticmethod
+    def _extract_alert_indicators(alert):
+        """Surface the triggering indicator(s) from an alert record (#41).
+
+        Combines the known ``ioc_*`` schema fields with a public-IP value scan so
+        IP-reputation / threat-intel matches (e.g. blacklisted-IP detections)
+        expose the actual indicator even when the process-behavior enrichment
+        only yields generic ProcessRollup2 telemetry. Returns ``{}`` when the
+        alert carries no indicator (the normal process-behavior detection case).
+        """
+        if not isinstance(alert, dict):
+            return {}
+        indicators = {}
+        for k in AlertsModule._IOC_FIELDS:
+            v = alert.get(k)
+            if v not in (None, "", [], {}):
+                indicators[k] = v
+        for k, v in alert.items():
+            if k in AlertsModule._IOC_FIELDS:
+                continue
+            ips = []
+            for s in AlertsModule._iter_scalar_strings(v):
+                ips.extend(AlertsModule._public_ips_in(s))
+            if ips:
+                indicators[f"{k} (public IP)"] = sorted(set(ips))
+        return indicators
+
     def _analyze_alert(self, detection_id, max_events=10):
         """Analyze an alert with type-specific enrichment routing."""
         alert_result = self._get_alert_details(detection_id)
@@ -734,6 +796,8 @@ class AlertsModule(BaseModule):
             "triggering_pid": None,  # populated for endpoint alerts only
             "triggering_record_index": None,
             "triggering_process": None,
+            # Indicator(s) carried by the alert record itself (IOC/network match).
+            "triggering_indicators": self._extract_alert_indicators(alert),
         }
 
         if product_type == "ngsiem" and _NGSIEM_AVAILABLE:
@@ -861,6 +925,16 @@ class AlertsModule(BaseModule):
         if assigned:
             parts.append(f"- **Assigned To**: {assigned}")
         parts.append("")
+
+        # Triggering Indicator block — IOC/network-match alerts (#41). Surfaces
+        # the actual matched indicator (blacklisted IP, domain, IOC) that the
+        # process-behavior enrichment does not carry.
+        indicators = analysis.get("triggering_indicators")
+        if indicators:
+            parts.append("### Triggering Indicator(s)")
+            for k, v in indicators.items():
+                parts.append(f"- **{k}**: {v}")
+            parts.append("")
 
         # Triggering Process block — endpoint alerts only
         triggering_process = analysis.get("triggering_process")

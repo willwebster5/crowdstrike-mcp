@@ -9,6 +9,7 @@ Tools:
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Annotated, Optional
 
 from crowdstrike_mcp.modules.base import BaseModule
@@ -34,31 +35,56 @@ _KEY_FIELDS = [
 ]
 
 
+_INDEX_RE = re.compile(r"\[(-?\d+)\]")
+
+
+def _split_segment(segment: str):
+    """Split a path segment into its key and any trailing ``[n]`` indices.
+
+    ``"usernames[3]"`` -> ``("usernames", [3])``; ``"matrix[1][2]"`` ->
+    ``("matrix", [1, 2])``; ``"name"`` -> ``("name", [])``.
+    """
+    bracket = segment.find("[")
+    if bracket == -1:
+        return segment, []
+    key = segment[:bracket]
+    indices = [int(m) for m in _INDEX_RE.findall(segment[bracket:])]
+    return key, indices
+
+
 def _get_nested(d: dict, dot_path: str):
     """Resolve a dotted field path against a record.
 
-    Supports both flat dotted keys (as produced by ``ngsiem_query``) and
-    nested dicts (as produced by ``alert_analysis``):
+    Supports flat dotted keys (as produced by ``ngsiem_query``), nested dicts
+    (as produced by ``alert_analysis``), and bracket indexing into list values:
 
       * First tries a literal key lookup (``d["source.ip"]``) — this handles
         CQL-style flat records where the dot is part of the key name.
-      * Falls back to splitting on ``.`` and walking the nested dict.
+      * Falls back to splitting on ``.`` and walking the nested dict, honoring
+        ``[n]`` list indices on each segment (e.g. ``Ngsiem.event.usernames[3]``
+        or ``events[1].name``).
 
-    Returns ``None`` on miss.
+    Returns ``None`` on miss (absent key or out-of-range/non-list index).
     """
     if not isinstance(d, dict):
         return None
     # Literal-key lookup first: handles flat dotted keys like "source.ip".
     if dot_path in d:
         return d[dot_path]
-    # Otherwise walk the nested dict.
-    keys = dot_path.split(".")
+    # Otherwise walk the nested dict, applying any [n] indices per segment.
     current = d
-    for key in keys:
-        if isinstance(current, dict):
-            current = current.get(key)
-        else:
-            return None
+    for segment in dot_path.split("."):
+        key, indices = _split_segment(segment)
+        if key:
+            if isinstance(current, dict):
+                current = current.get(key)
+            else:
+                return None
+        for idx in indices:
+            if isinstance(current, list) and -len(current) <= idx < len(current):
+                current = current[idx]
+            else:
+                return None
     return current
 
 
@@ -95,7 +121,10 @@ class ResponseStoreModule(BaseModule):
                 "`Ngsiem.event.usernames`). When unsure, call with "
                 "`record_index=0` first to discover the schema, or call with "
                 "just `ref_id` to see a metadata overview including the "
-                "available top-level keys."
+                "available top-level keys.\n\n"
+                "Array indexing: a field path may index into a list value with "
+                "`[n]` (0-based, negatives allowed), e.g. "
+                "`Ngsiem.event.usernames[3]` or `events[0].name`."
             ),
         )
         self._add_tool(

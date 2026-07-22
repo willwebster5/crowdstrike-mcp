@@ -82,6 +82,7 @@ def format_text_response(
     raw: bool = False,
     structured_data: dict | None = None,
     metadata: dict | None = None,
+    force_store: bool = False,
 ) -> Union[str, List[Dict[str, str]]]:
     """Format a text string as an MCP-compatible response.
 
@@ -96,14 +97,18 @@ def format_text_response(
              If ``False`` (default), return ``[{"type": "text", "text": ...}]``.
         structured_data: Raw structured dict from the tool (opt-in).
         metadata: Query context, filters, alert ID, etc. for the store.
+        force_store: Store ``structured_data`` even when the response is small,
+            so a ref_id is always available (e.g. ngsiem_query, where a 1-event
+            result may still carry a long ``@rawstring`` the caller needs in full).
     """
     # Only persist when something is actually large: either the rendered text
     # (so the model can recover the truncated tail) or the structured payload
     # itself (compact-summary tools like ngsiem_query keep text small but carry
-    # large data). Trivially small responses must not consume buffer slots.
+    # large data). Trivially small responses must not consume buffer slots —
+    # unless the caller forces it via force_store.
     text_large = len(text) > LARGE_RESPONSE_THRESHOLD
     ref_id = None
-    if structured_data is not None and (text_large or _is_large_payload(structured_data)):
+    if structured_data is not None and (force_store or text_large or _is_large_payload(structured_data)):
         ref_id = ResponseStore.store(structured_data, tool_name, metadata)
 
     if not text_large:

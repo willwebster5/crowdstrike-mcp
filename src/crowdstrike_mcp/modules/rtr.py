@@ -7,7 +7,7 @@ Tools:
   rtr_pulse_session                — Keep-alive ping (resets 10-min idle timeout)
   rtr_execute_command              — Run an allowlisted active-responder command
   rtr_check_command_status         — Poll a submitted command; return stdout/stderr
-  rtr_list_files                   — List files pulled via `getfile`
+  rtr_list_files                   — List files pulled via `get`
   rtr_get_extracted_file_contents  — Download a pulled file (7z, password: infected)
 
 Safety model:
@@ -47,7 +47,7 @@ DEFAULT_ALLOWED_BASE_COMMANDS = {
     "ls",
     "ps",
     "reg query",
-    "getfile",
+    "get",
     "cat",
     "env",
     "ipconfig",
@@ -143,7 +143,7 @@ class RTRModule(BaseModule):
             name="rtr_execute_command",
             description=(
                 "Run a read-only active-responder command on a host (ls, ps, "
-                "reg query, getfile, cat, netstat, ...). Base command must be "
+                "reg query, get, cat, netstat, ...). Base command must be "
                 "in the allowlist. See falcon://rtr/commands. Returns a "
                 "cloud_request_id — poll rtr_check_command_status for output. "
                 "Every invocation (including rejections) is written to "
@@ -165,7 +165,7 @@ class RTRModule(BaseModule):
             self.rtr_list_files,
             name="rtr_list_files",
             description=(
-                "List files pulled into an RTR session via `getfile`. Returns "
+                "List files pulled into an RTR session via `get`. Returns "
                 "name, sha256, and size. Pair with rtr_get_extracted_file_contents "
                 "to download the 7z archive."
             ),
@@ -175,7 +175,7 @@ class RTRModule(BaseModule):
             self.rtr_get_extracted_file_contents,
             name="rtr_get_extracted_file_contents",
             description=(
-                "Download a file pulled via `getfile` to a local 7z archive "
+                "Download a file pulled via `get` to a local 7z archive "
                 "(saved under ~/.config/falcon/rtr_downloads/<sha256>.7z). "
                 "Password: `infected`. Use rtr_list_files to find the sha256 first."
             ),
@@ -329,14 +329,14 @@ class RTRModule(BaseModule):
         self,
         session_id: Annotated[str, "RTR session ID"],
     ) -> str:
-        """List files pulled via `getfile` in this session."""
+        """List files pulled via `get` in this session."""
         result = self._list_files(session_id)
         if not result.get("success"):
             return format_text_response(f"Failed to list RTR session files: {result.get('error')}", raw=True)
         files = result["files"]
         lines = [f"RTR Session Files: {len(files)} records", ""]
         if not files:
-            lines.append("No files have been pulled in this session. Use `getfile` first.")
+            lines.append("No files have been pulled in this session. Use `get <path>` first.")
         else:
             for i, f in enumerate(files, 1):
                 lines.append(f"{i}. **{f.get('name', '?')}** — sha256: {f.get('sha256', '?')}")

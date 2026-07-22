@@ -64,7 +64,7 @@ def rtr_module(mock_client, tmp_path):
 
 class TestRTRAllowlist:
     def test_default_allowlist_contains_read_only_verbs(self, rtr_module):
-        for verb in ["ls", "ps", "reg query", "getfile", "cat", "pwd"]:
+        for verb in ["ls", "ps", "reg query", "get", "cat", "pwd"]:
             assert verb in rtr_module._allowlist
 
     def test_default_allowlist_excludes_hard_denied(self, rtr_module):
@@ -107,6 +107,28 @@ class TestRTRAllowlist:
         err = rtr_module._validate_command("ls", "ps aux")
         assert err is not None
         assert "start with" in err.lower()
+
+
+class TestRTRGetCommand:
+    """Issue #35: the RTR file-retrieval command is `get`, not `getfile`.
+
+    `getfile` is not a real RTR base command, so the live API rejected it with
+    HTTP 400 "Command not found". The allowlist must expose `get` instead.
+    """
+
+    def test_allowlist_contains_get(self, rtr_module):
+        assert "get" in rtr_module._allowlist
+
+    def test_allowlist_no_longer_contains_getfile(self, rtr_module):
+        assert "getfile" not in rtr_module._allowlist
+
+    def test_validate_command_accepts_get(self, rtr_module):
+        assert rtr_module._validate_command("get", "get C:\\Users\\x\\evidence.exe") is None
+
+    def test_validate_command_rejects_getfile(self, rtr_module):
+        err = rtr_module._validate_command("getfile", "getfile C:\\Users\\x\\evidence.exe")
+        assert err is not None
+        assert "allowlist" in err.lower()
 
 
 class TestRTRInitSession:

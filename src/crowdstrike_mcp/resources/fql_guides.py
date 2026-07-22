@@ -263,7 +263,7 @@ RTR_COMMANDS_GUIDE = """\
 - `ls` — list directory contents. Example: `ls "C:\\\\Windows\\\\Temp"`
 - `ps` — list running processes. Example: `ps`
 - `reg query` — query a Windows registry key/value. Example: `reg query HKLM\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run`
-- `getfile` — queue a file retrieval (pull to the Falcon cloud; then use rtr_list_files + rtr_get_extracted_file_contents to download)
+- `get <path>` — queue a file retrieval (pull to the Falcon cloud; then use rtr_list_files + rtr_get_extracted_file_contents to download)
 - `cat` — print a file's contents to session output. Example: `cat /etc/hosts`
 - `env` — dump environment variables on the host
 - `ipconfig` — Windows: network adapter info
@@ -276,7 +276,7 @@ RTR_COMMANDS_GUIDE = """\
 - `mount` — list mounted volumes
 - `users` — list logged-in users
 - `history` — session command history
-- `memdump` — process memory dump (writes to session working dir, pull via getfile)
+- `memdump` — process memory dump (writes to session working dir, pull via `get`)
 
 ## Always denied — rejected at the MCP layer
 `cp`, `mv`, `rm`, `put`, `runscript`, `kill`, `mkdir`. These are denied even if added
@@ -291,7 +291,7 @@ via the `CROWDSTRIKE_MCP_RTR_EXTRA_ALLOWED` env var — the deny list wins.
 1. `rtr_init_session(device_id=...)` → returns `session_id`.
 2. `rtr_execute_command(session_id, base_command='ps', command_string='ps')` → returns `cloud_request_id`.
 3. `rtr_check_command_status(cloud_request_id, session_id)` — poll until `complete:true`; returns stdout/stderr.
-4. If a file was pulled via `getfile`: `rtr_list_files(session_id)` → `rtr_get_extracted_file_contents(session_id, sha256)`.
+4. If a file was pulled via `get`: `rtr_list_files(session_id)` → `rtr_get_extracted_file_contents(session_id, sha256)`.
 
 ## Retrieved files
 7z archives password-protected with `infected` (standard CrowdStrike convention).

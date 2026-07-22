@@ -67,7 +67,13 @@ class NGSIEMModule(BaseModule):
             server,
             self.ngsiem_query,
             name="ngsiem_query",
-            description=("Execute an NGSIEM/CQL query against a selectable repository (default: search-all, spanning all CrowdStrike logs)"),
+            description=(
+                "Execute an NGSIEM/CQL query against a selectable repository (default: search-all, "
+                "spanning all CrowdStrike logs). Long field values (e.g. @rawstring) are truncated "
+                "to ~200 chars inline; pass full=True to render them untruncated, or fetch the full "
+                "value via get_stored_response — every non-empty result is stored under a resp_XXX "
+                "ref, including single-event result sets."
+            ),
         )
         self._add_tool(
             server,
@@ -156,6 +162,11 @@ class NGSIEMModule(BaseModule):
         ] = None,
         max_results: Annotated[int, "Maximum results to return (default: 100, max: 1000)"] = 100,
         fields: Annotated[Optional[str], "Comma-separated field names for server-side projection via select()"] = None,
+        full: Annotated[
+            bool,
+            "Render long field values (e.g. @rawstring) in full inline instead of truncating to ~200 chars. "
+            "Results are always retrievable in full via get_stored_response regardless of this flag.",
+        ] = False,
         repository: Annotated[
             str,
             "Repository to search. Options: search-all (default, all event data), investigate_view "
@@ -201,7 +212,7 @@ class NGSIEMModule(BaseModule):
                     lines.append(f"\n#{i + 1}:")
                     for key, value in event.items():
                         str_value = str(value)
-                        if len(str_value) > 200:
+                        if not full and len(str_value) > 200:
                             str_value = str_value[:200] + "..."
                         lines.append(f"  {key}: {str_value}")
                 if len(events) > 10:
@@ -218,6 +229,9 @@ class NGSIEMModule(BaseModule):
                 raw=True,
                 structured_data=result,
                 metadata={"query": result.get("query"), "time_range": result.get("time_range")},
+                # Always keep a retrievable ref when there are events, so a small
+                # result set with a long @rawstring is recoverable in full (#40).
+                force_store=bool(events),
             )
         else:
             error_text = (
