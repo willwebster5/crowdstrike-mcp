@@ -221,6 +221,8 @@ class ResponseStore:
     # records what an evicted ref *was* (tool + metadata, no payload) so a miss
     # can tell the caller how to regenerate the data. Wiped with the partition —
     # metadata can embed query strings, which must not outlive the credential.
+    # Note: tombstone metadata has no TTL of its own, so it may persist past the
+    # data's 25-min bound until partition wipe or cap displacement.
     _tombstones: "dict[str, OrderedDict[str, dict]]" = {}
     _tombstone_cap: int = 50
 
