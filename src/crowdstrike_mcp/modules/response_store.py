@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Annotated, Optional
 from crowdstrike_mcp.modules.base import BaseModule
 from crowdstrike_mcp.response_store import (
     ResponseStore,
+    format_fields_line,
     metadata_context,
     schema_hint,
     select_records,
@@ -235,10 +236,17 @@ class ResponseStoreModule(BaseModule):
         if search is not None:
             all_matches = [r for r in flat if search.lower() in _stringify_record(r).lower()]
             if not all_matches:
-                return format_text_response(
-                    f"No records matching '{search}' in {ref_id}.",
-                    raw=True,
+                lines = [
+                    f"No records matching '{search}' in {ref_id} (searched {len(flat)} records).",
+                    "Search is a case-insensitive substring match over all record values.",
+                ]
+                entries = schema_hint(flat)
+                if entries:
+                    lines.append(f"Available fields: {format_fields_line(entries)}")
+                lines.append(
+                    "Tip: try a shorter substring, or project candidate fields with fields=..."
                 )
+                return format_text_response("\n".join(lines), raw=True)
             result_set = [self._project_fields(m, fields) for m in all_matches] if fields else all_matches
             return self._emit_page(result_set, offset=offset, max_results=max_results, ref_id=ref_id)
 
