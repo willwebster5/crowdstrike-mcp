@@ -263,7 +263,7 @@ class ResponseStoreModule(BaseModule):
                 warning_lines = [
                     "Warning: all requested fields returned null for every record.",
                     f"Requested fields: {fields}",
-                    f"Available top-level keys: [{', '.join(top_keys) if top_keys else '(none)'}]",
+                    f"Available top-level keys: [{format_fields_line(top_keys) if top_keys else '(none)'}]",
                     "Tip: call get_stored_response(ref_id=..., record_index=0) to inspect the actual schema.",
                     "",
                     "Projected data (all nulls):",
