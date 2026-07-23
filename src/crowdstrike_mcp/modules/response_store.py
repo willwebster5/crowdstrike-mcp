@@ -130,6 +130,9 @@ class ResponseStoreModule(BaseModule):
                 "Array indexing: a field path may index into a list value with "
                 "`[n]` (0-based, negatives allowed), e.g. "
                 "`Ngsiem.event.usernames[3]` or `events[0].name`.\n\n"
+                "Full records: pass `fields=\"*\"` to page through complete "
+                "records (combine with `offset`/`max_results`) instead of "
+                "fetching them one `record_index` at a time.\n\n"
                 "Paging: large fields/search results are returned one page at a "
                 "time within a safe size budget. Each page prints a notice like "
                 "`[page: records 0-41 of 200 ...; next offset=42]`; pass that "
@@ -223,7 +226,7 @@ class ResponseStoreModule(BaseModule):
         if fields:
             projected_all = [self._project_fields(r, fields) for r in flat]
             window = projected_all[offset : offset + max_results]
-            if window and self._all_projections_null(window):
+            if window and not self._is_wildcard(fields) and self._all_projections_null(window):
                 # Surface a discoverable warning instead of silently returning
                 # a list of all-null dicts. Helps callers recover when field
                 # paths don't match the underlying record shape (e.g., CQL
@@ -352,9 +355,16 @@ class ResponseStoreModule(BaseModule):
         return "\n".join(lines)
 
     @staticmethod
+    def _is_wildcard(fields_str: str) -> bool:
+        """True if the fields spec requests full records (contains a bare "*")."""
+        return "*" in [f.strip() for f in fields_str.split(",")]
+
+    @staticmethod
     def _project_fields(record: dict, fields_str: str) -> dict:
-        """Extract dot-path fields from a record."""
+        """Extract dot-path fields from a record. A "*" entry returns it whole."""
         field_list = [f.strip() for f in fields_str.split(",") if f.strip()]
+        if "*" in field_list:
+            return record
         result = {}
         for f in field_list:
             result[f] = _get_nested(record, f)
