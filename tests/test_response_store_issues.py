@@ -92,7 +92,8 @@ class TestCapNotice:
     def test_fields_capped_shows_notice(self, module):
         ref = self._store_many(30)
         out = asyncio.run(module.get_stored_response(ref_id=ref, fields="v", max_results=5))
-        assert "5 of 30" in out
+        assert "of 30" in out
+        assert "next offset=5" in out
 
     def test_fields_uncapped_no_notice(self, module):
         ref = self._store_many(3)
@@ -104,7 +105,8 @@ class TestCapNotice:
     def test_search_capped_shows_notice(self, module):
         ref = ResponseStore.store({"records": [{"v": "match"} for _ in range(30)]}, tool_name="t")
         out = asyncio.run(module.get_stored_response(ref_id=ref, search="match", max_results=5))
-        assert "5 of 30" in out
+        assert "of 30" in out
+        assert "next offset=5" in out
 
 
 # --- #31 — TTL + clear_session ---------------------------------------------
