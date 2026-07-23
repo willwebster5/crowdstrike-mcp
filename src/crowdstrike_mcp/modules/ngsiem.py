@@ -40,6 +40,13 @@ if TYPE_CHECKING:
 DEFAULT_POLL_INTERVAL_SECONDS = 2
 DEFAULT_TIMEOUT_SECONDS = 300
 
+# Inline result rows rendered by ngsiem_query. Raised from the old hard cap of 10;
+# overridable per call (display_rows) or via env. The full result set is always
+# retrievable via get_stored_response, and oversized inline text is still stored
+# and paged, so a higher default is safe.
+DEFAULT_INLINE_ROWS = 50
+MAX_INLINE_ROWS = 1000
+
 
 class NGSIEMModule(BaseModule):
     """NGSIEM query module for global search-all repository."""
@@ -167,6 +174,11 @@ class NGSIEMModule(BaseModule):
             "Render long field values (e.g. @rawstring) in full inline instead of truncating to ~200 chars. "
             "Results are always retrievable in full via get_stored_response regardless of this flag.",
         ] = False,
+        display_rows: Annotated[
+            Optional[int],
+            "How many result rows to render inline (default 50, env FALCON_MCP_NGSIEM_DISPLAY_ROWS). "
+            "The full result set is always retrievable via get_stored_response.",
+        ] = None,
         repository: Annotated[
             str,
             "Repository to search. Options: search-all (default, all event data), investigate_view "
@@ -207,16 +219,17 @@ class NGSIEMModule(BaseModule):
             lines.append("")
 
             if events:
+                n_show = self._resolve_display_rows(display_rows)
                 lines.append("Results:")
-                for i, event in enumerate(events[:10]):
+                for i, event in enumerate(events[:n_show]):
                     lines.append(f"\n#{i + 1}:")
                     for key, value in event.items():
                         str_value = str(value)
                         if not full and len(str_value) > 200:
                             str_value = str_value[:200] + "..."
                         lines.append(f"  {key}: {str_value}")
-                if len(events) > 10:
-                    lines.append(f"\n... and {len(events) - 10} more results")
+                if len(events) > n_show:
+                    lines.append(f"\n... and {len(events) - n_show} more results (retrieve all via get_stored_response)")
             else:
                 lines.append("No events found matching the query.")
                 lines.append("\nTips:")
@@ -264,6 +277,19 @@ class NGSIEMModule(BaseModule):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return str(int(dt.timestamp() * 1000))
+
+    @staticmethod
+    def _resolve_display_rows(display_rows: int | None) -> int:
+        """Resolve the inline row cap: explicit arg > env default > module default.
+
+        Clamped to [1, MAX_INLINE_ROWS]. Invalid env values fall back to the default.
+        """
+        if display_rows is None:
+            try:
+                display_rows = int(os.environ.get("FALCON_MCP_NGSIEM_DISPLAY_ROWS", str(DEFAULT_INLINE_ROWS)))
+            except (ValueError, TypeError):
+                display_rows = DEFAULT_INLINE_ROWS
+        return min(max(display_rows, 1), MAX_INLINE_ROWS)
 
     def _execute_query(
         self,

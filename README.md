@@ -184,7 +184,7 @@ docker run -p 8000:8000 \
 | `ngsiem_list_data_connectors` | Enumerate available data connectors |
 | `ngsiem_list_connector_configs` | Enumerate connector configuration instances |
 
-**`ngsiem_query` parameters:** `query` (CQL string), `start_time` (e.g. `1h`, `1d`, `7d`, `30d`), `max_results` (1-1000)
+**`ngsiem_query` parameters:** `query` (CQL string), `start_time` (e.g. `1h`, `1d`, `7d`, `30d`), `max_results` (1-1000), `full` (render long values untruncated inline), `display_rows` (inline rows shown; default 50, env `FALCON_MCP_NGSIEM_DISPLAY_ROWS`)
 
 ```
 "Show me failed console logins in the last 24 hours"
