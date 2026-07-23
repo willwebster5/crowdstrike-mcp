@@ -332,6 +332,7 @@ def build_truncation_notice(
     record_count: int,
     tool_name: str,
     metadata: dict | None,
+    data: dict | None = None,
 ) -> str:
     """Build the truncation notice for a large, stored response.
 
@@ -339,11 +340,19 @@ def build_truncation_notice(
     it lives here rather than in the generic text formatter. The record-key hint
     is driven by a generic ``record_key`` metadata field (``triggering_pid`` is
     accepted as a back-compat alias) — the formatter need not know either name.
+    When ``data`` is provided, a capped ``Fields:`` line surfaces available
+    field paths so the first extraction call is informed, not guessed.
     """
     metadata = metadata or {}
 
     ctx = metadata_context(metadata)
     context_line = f"\nTool: {tool_name} | {ctx}" if ctx else ""
+
+    fields_line = ""
+    if data is not None:
+        entries = schema_hint(select_records(data))
+        if entries:
+            fields_line = f"\nFields: {format_fields_line(entries)}"
 
     record_key = metadata.get("record_key") or metadata.get("triggering_pid")
     if record_key:
@@ -360,11 +369,12 @@ def build_truncation_notice(
         summary,
         "",
         f"--- RESPONSE TRUNCATED ({text_len:,} chars) ---",
-        f"Structured data stored as: {ref_id} ({record_count} records){context_line}",
+        f"Structured data stored as: {ref_id} ({record_count} records){context_line}{fields_line}",
         "",
         "To query this data use the get_stored_response tool:",
         f'  get_stored_response(ref_id="{ref_id}")                                → metadata overview',
         f'  get_stored_response(ref_id="{ref_id}", fields="source.ip,user.name")  → extract fields',
+        f'  get_stored_response(ref_id="{ref_id}", fields="*")                    → full records (paged)',
         f'  get_stored_response(ref_id="{ref_id}", search="keyword")              → search records',
         *last_lines,
     ]

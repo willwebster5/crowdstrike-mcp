@@ -127,6 +127,7 @@ def format_text_response(
             record_count=stored.record_count if stored else 0,
             tool_name=tool_name,
             metadata=metadata,
+            data=structured_data,
         )
     else:
         # Caller didn't provide structured_data — return a summary with no disk write.
