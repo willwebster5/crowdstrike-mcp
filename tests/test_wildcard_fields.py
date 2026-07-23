@@ -35,9 +35,7 @@ class TestWildcardFields:
         page1 = asyncio.run(module.get_stored_response(ref_id=ref, fields="*", max_results=4))
         assert "[page: records 0–3 of 10" in page1
         assert "next offset=4" in page1
-        page2 = asyncio.run(
-            module.get_stored_response(ref_id=ref, fields="*", max_results=4, offset=4)
-        )
+        page2 = asyncio.run(module.get_stored_response(ref_id=ref, fields="*", max_results=4, offset=4))
         assert "[page: records 4–7 of 10" in page2
 
     def test_wildcard_respects_byte_budget(self, module):
@@ -56,14 +54,10 @@ class TestWildcardFields:
 
     def test_wildcard_with_search_returns_full_matches(self, module):
         ref = _store([{"name": "alpha", "x": 1}, {"name": "beta", "x": 2}])
-        result = asyncio.run(
-            module.get_stored_response(ref_id=ref, search="beta", fields="*")
-        )
+        result = asyncio.run(module.get_stored_response(ref_id=ref, search="beta", fields="*"))
         assert json.loads(result) == [{"name": "beta", "x": 2}]
 
     def test_wildcard_with_record_index_returns_single_record(self, module):
         ref = _store([{"a": 1}, {"a": 2}])
-        result = asyncio.run(
-            module.get_stored_response(ref_id=ref, record_index=1, fields="*")
-        )
+        result = asyncio.run(module.get_stored_response(ref_id=ref, record_index=1, fields="*"))
         assert json.loads(result) == {"a": 2}

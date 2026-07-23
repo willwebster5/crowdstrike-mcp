@@ -28,8 +28,6 @@ class TestSearchMissFeedback:
         assert "Tip:" in result
 
     def test_match_path_unchanged(self, module):
-        ref = ResponseStore.store(
-            {"events": [{"user": "alice"}]}, tool_name="ngsiem_query"
-        )
+        ref = ResponseStore.store({"events": [{"user": "alice"}]}, tool_name="ngsiem_query")
         result = asyncio.run(module.get_stored_response(ref_id=ref, search="alice"))
         assert json.loads(result) == [{"user": "alice"}]

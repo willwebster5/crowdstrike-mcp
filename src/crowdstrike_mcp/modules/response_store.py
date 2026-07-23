@@ -114,10 +114,7 @@ def _tombstone_error(ref_id: str, tomb: dict) -> str:
         cause = f"expired ({ttl_min}-min TTL)"
     else:
         cause = "was evicted to make room for newer responses"
-    return (
-        f"Reference '{ref_id}' {cause}. It was {tool}{ctx_part} — "
-        "re-run that tool to regenerate the data."
-    )
+    return f"Reference '{ref_id}' {cause}. It was {tool}{ctx_part} — re-run that tool to regenerate the data."
 
 
 class ResponseStoreModule(BaseModule):
@@ -148,7 +145,7 @@ class ResponseStoreModule(BaseModule):
                 "Array indexing: a field path may index into a list value with "
                 "`[n]` (0-based, negatives allowed), e.g. "
                 "`Ngsiem.event.usernames[3]` or `events[0].name`.\n\n"
-                "Full records: pass `fields=\"*\"` to page through complete "
+                'Full records: pass `fields="*"` to page through complete '
                 "records (combine with `offset`/`max_results`) instead of "
                 "fetching them one `record_index` at a time.\n\n"
                 "Paging: large fields/search results are returned one page at a "
@@ -243,9 +240,7 @@ class ResponseStoreModule(BaseModule):
                 entries = schema_hint(flat)
                 if entries:
                     lines.append(f"Available fields: {format_fields_line(entries)}")
-                lines.append(
-                    "Tip: try a shorter substring, or project candidate fields with fields=..."
-                )
+                lines.append("Tip: try a shorter substring, or project candidate fields with fields=...")
                 return format_text_response("\n".join(lines), raw=True)
             result_set = [self._project_fields(m, fields) for m in all_matches] if fields else all_matches
             return self._emit_page(result_set, offset=offset, max_results=max_results, ref_id=ref_id)

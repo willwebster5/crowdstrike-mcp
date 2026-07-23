@@ -40,8 +40,6 @@ class TestFormatTextResponsePassesData:
     def test_truncated_response_notice_includes_schema(self):
         data = {"events": [{"id": 1, "name": "x"}]}
         text = "line\n" * (LARGE_RESPONSE_THRESHOLD // 4)
-        result = format_text_response(
-            text, tool_name="ngsiem_query", raw=True, structured_data=data
-        )
+        result = format_text_response(text, tool_name="ngsiem_query", raw=True, structured_data=data)
         assert "RESPONSE TRUNCATED" in result
         assert "Fields: id, name" in result
