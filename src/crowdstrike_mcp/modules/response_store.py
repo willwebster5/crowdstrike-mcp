@@ -13,7 +13,12 @@ import re
 from typing import TYPE_CHECKING, Annotated, Optional
 
 from crowdstrike_mcp.modules.base import BaseModule
-from crowdstrike_mcp.response_store import ResponseStore, select_records
+from crowdstrike_mcp.response_store import (
+    ResponseStore,
+    schema_hint,
+    select_records,
+    top_level_keys,
+)
 from crowdstrike_mcp.utils import format_text_response
 
 if TYPE_CHECKING:
@@ -299,46 +304,13 @@ class ResponseStoreModule(BaseModule):
 
     @staticmethod
     def _top_level_keys(records: list[dict]) -> list[str]:
-        """Union of top-level keys across all dict records, preserving first-seen order."""
-        seen: dict[str, None] = {}
-        for r in records:
-            if isinstance(r, dict):
-                for k in r.keys():
-                    seen.setdefault(k, None)
-        return list(seen.keys())
+        """Union of top-level keys across all dict records (shared helper)."""
+        return top_level_keys(records)
 
     @classmethod
     def _schema_hint(cls, records: list[dict]) -> list[str]:
-        """Build a schema hint listing top-level keys and one level of nested subkeys.
-
-        For each top-level key seen across records:
-          * If its value is a dict in any record, list the subkeys as
-            ``parent.child`` entries.
-          * Otherwise, list just the top-level key name.
-
-        Intended to help callers discover the actual field paths in stored data
-        without needing to fetch a full record first.
-        """
-        top_keys = cls._top_level_keys(records)
-        if not top_keys:
-            return []
-        # Collect nested subkeys: {parent_key: ordered-list of subkeys}
-        nested: dict[str, dict[str, None]] = {k: {} for k in top_keys}
-        for r in records:
-            if not isinstance(r, dict):
-                continue
-            for k, v in r.items():
-                if isinstance(v, dict):
-                    for sk in v.keys():
-                        nested[k].setdefault(sk, None)
-        entries: list[str] = []
-        for k in top_keys:
-            subs = list(nested.get(k, {}).keys())
-            if subs:
-                entries.extend(f"{k}.{sk}" for sk in subs)
-            else:
-                entries.append(k)
-        return entries
+        """Available field paths in stored records (shared helper)."""
+        return schema_hint(records)
 
     @classmethod
     def _format_metadata(cls, stored) -> str:

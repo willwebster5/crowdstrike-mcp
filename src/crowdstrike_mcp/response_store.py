@@ -105,6 +105,80 @@ def select_records(data: dict) -> list:
     return []
 
 
+# Metadata keys used (in order) to build the truncation-notice context line.
+_CONTEXT_KEYS = ("detection_id", "query", "filter")
+
+
+def top_level_keys(records: list) -> list[str]:
+    """Union of top-level keys across all dict records, preserving first-seen order."""
+    seen: dict[str, None] = {}
+    for r in records:
+        if isinstance(r, dict):
+            for k in r.keys():
+                seen.setdefault(k, None)
+    return list(seen.keys())
+
+
+def schema_hint(records: list) -> list[str]:
+    """Available field paths: top-level keys, with dict values expanded one level.
+
+    For each top-level key seen across records, list ``parent.child`` entries
+    when the value is a dict in any record, else the bare key. Helps callers
+    discover real field paths without fetching a full record first.
+    """
+    keys = top_level_keys(records)
+    if not keys:
+        return []
+    nested: dict[str, dict[str, None]] = {k: {} for k in keys}
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        for k, v in r.items():
+            if isinstance(v, dict):
+                for sk in v.keys():
+                    nested[k].setdefault(sk, None)
+    entries: list[str] = []
+    for k in keys:
+        subs = list(nested.get(k, {}).keys())
+        if subs:
+            entries.extend(f"{k}.{sk}" for sk in subs)
+        else:
+            entries.append(k)
+    return entries
+
+
+def format_fields_line(entries: list[str], max_entries: int = 40, max_chars: int = 600) -> str:
+    """Join field entries into a display line capped by count and length.
+
+    Whichever cap is hit first wins; omitted entries are summarized as
+    ``(+N more)`` so the caller knows the list is truncated.
+    """
+    if not entries:
+        return ""
+    shown: list[str] = []
+    length = 0
+    for e in entries[:max_entries]:
+        added = len(e) + (2 if shown else 0)  # ", " separator
+        if shown and length + added > max_chars:
+            break
+        shown.append(e)
+        length += added
+    line = ", ".join(shown)
+    omitted = len(entries) - len(shown)
+    if omitted > 0:
+        line += f" (+{omitted} more)"
+    return line
+
+
+def metadata_context(metadata: dict | None) -> str:
+    """First useful ``key: value`` context pair from stored metadata, or ''."""
+    for key in _CONTEXT_KEYS:
+        val = (metadata or {}).get(key)
+        if val:
+            return f"{key}: {val}"
+    return ""
+
+
 @dataclass
 class StoredResponse:
     """A stored structured response from an MCP tool."""
@@ -250,10 +324,6 @@ class ResponseStore:
             cls._counters.clear()
 
 
-# Metadata keys used (in order) to build the truncation-notice context line.
-_CONTEXT_KEYS = ("detection_id", "query", "filter")
-
-
 def build_truncation_notice(
     *,
     summary: str,
@@ -272,12 +342,8 @@ def build_truncation_notice(
     """
     metadata = metadata or {}
 
-    context_line = ""
-    for key in _CONTEXT_KEYS:
-        val = metadata.get(key)
-        if val:
-            context_line = f"\nTool: {tool_name} | {key}: {val}"
-            break
+    ctx = metadata_context(metadata)
+    context_line = f"\nTool: {tool_name} | {ctx}" if ctx else ""
 
     record_key = metadata.get("record_key") or metadata.get("triggering_pid")
     if record_key:
