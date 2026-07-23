@@ -46,3 +46,14 @@ class TestTombstoneErrors:
         result = asyncio.run(module.get_stored_response(ref_id="resp_999"))
         assert "not found" in result
         assert "Available: resp_001" in result
+
+    def test_expired_ref_with_messy_query_stays_single_line(self, module):
+        messy_query = ("#type=x\n| tail(5)\n  | table(a, b, c) " * 20)
+        ref = ResponseStore.store(
+            {"events": [{"a": 1}]}, "ngsiem_query", {"query": messy_query}
+        )
+        _expire(ref)
+        result = asyncio.run(module.get_stored_response(ref_id=ref))
+        assert "\n" not in result
+        assert "re-run" in result
+        assert len(result) < 400

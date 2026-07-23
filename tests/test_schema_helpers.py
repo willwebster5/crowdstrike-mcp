@@ -58,3 +58,17 @@ class TestMetadataContext:
     def test_empty_metadata(self):
         assert metadata_context({}) == ""
         assert metadata_context(None) == ""
+
+    def test_multiline_query_flattened_to_one_line(self):
+        md = {"query": "#type=x\n| tail(5)\n  | table(a, b)"}
+        result = metadata_context(md)
+        assert "\n" in md["query"]  # sanity: input actually has newlines
+        assert "\n" not in result
+        assert "  " not in result
+
+    def test_long_query_capped_with_ellipsis(self):
+        md = {"query": "a" * 500}
+        result = metadata_context(md)
+        assert result.startswith("query: ")
+        assert result == f"query: {'a' * 200}…"
+        assert len(result) == len("query: ") + 201

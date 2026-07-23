@@ -171,11 +171,18 @@ def format_fields_line(entries: list[str], max_entries: int = 40, max_chars: int
 
 
 def metadata_context(metadata: dict | None) -> str:
-    """First useful ``key: value`` context pair from stored metadata, or ''."""
+    """First useful ``key: value`` context pair from stored metadata, or ''.
+
+    Values are flattened to one line and capped so free-form query strings
+    can't break single-line notices/errors that embed this context.
+    """
     for key in _CONTEXT_KEYS:
         val = (metadata or {}).get(key)
         if val:
-            return f"{key}: {val}"
+            flat = " ".join(str(val).split())
+            if len(flat) > 200:
+                flat = flat[:200] + "…"
+            return f"{key}: {flat}"
     return ""
 
 
