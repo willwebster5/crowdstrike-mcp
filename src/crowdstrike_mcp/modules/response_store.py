@@ -124,7 +124,11 @@ class ResponseStoreModule(BaseModule):
                 "available top-level keys.\n\n"
                 "Array indexing: a field path may index into a list value with "
                 "`[n]` (0-based, negatives allowed), e.g. "
-                "`Ngsiem.event.usernames[3]` or `events[0].name`."
+                "`Ngsiem.event.usernames[3]` or `events[0].name`.\n\n"
+                "Paging: large fields/search results are returned one page at a "
+                "time within a safe size budget. Each page prints a notice like "
+                "`[page: records 0-41 of 200 ...; next offset=42]`; pass that "
+                "`offset` to fetch the next page. Nothing is silently dropped."
             ),
         )
         self._add_tool(
@@ -141,9 +145,12 @@ class ResponseStoreModule(BaseModule):
         record_key: Annotated[Optional[str], "Find record by natural key (scans common ID fields)"] = None,
         fields: Annotated[Optional[str], "Comma-separated dot-path fields to extract"] = None,
         search: Annotated[Optional[str], "Case-insensitive text search across record values"] = None,
-        max_results: Annotated[int, "Cap returned records (default: 20)"] = 20,
+        max_results: Annotated[int, "Cap returned records per page (default: 20)"] = 20,
+        offset: Annotated[int, "0-based record offset for paging large results (use the 'next offset' from a page notice)"] = 0,
     ) -> str:
         """Query stored structured data by reference ID."""
+        max_results = max(1, max_results)
+        offset = max(0, offset)
         stored = ResponseStore.get(ref_id)
         if not stored:
             available = ResponseStore.list_refs()
@@ -179,10 +186,9 @@ class ResponseStoreModule(BaseModule):
             record = flat[record_index]
             if fields:
                 record = self._project_fields(record, fields)
-            return format_text_response(
-                json.dumps(record, indent=2, default=str),
-                raw=True,
-            )
+            # A specific record is returned verbatim — even when large — so a full
+            # @rawstring stays retrievable. Bypasses the large-response drop guard.
+            return json.dumps(record, indent=2, default=str)
 
         # record_key → find by natural key
         if record_key is not None:
@@ -195,33 +201,24 @@ class ResponseStoreModule(BaseModule):
                 )
             if fields:
                 match = self._project_fields(match, fields)
-            return format_text_response(
-                json.dumps(match, indent=2, default=str),
-                raw=True,
-            )
+            return json.dumps(match, indent=2, default=str)
 
-        # search → text search
+        # search → text search (size-aware paged)
         if search is not None:
             all_matches = [r for r in flat if search.lower() in _stringify_record(r).lower()]
-            matches = all_matches[:max_results]
-            if fields:
-                matches = [self._project_fields(m, fields) for m in matches]
-            if not matches:
+            if not all_matches:
                 return format_text_response(
                     f"No records matching '{search}' in {ref_id}.",
                     raw=True,
                 )
-            body = json.dumps(matches, indent=2, default=str)
-            return format_text_response(
-                self._with_cap_notice(body, len(matches), len(all_matches)),
-                raw=True,
-            )
+            result_set = [self._project_fields(m, fields) for m in all_matches] if fields else all_matches
+            return self._emit_page(result_set, offset=offset, max_results=max_results, ref_id=ref_id)
 
-        # fields only → extract from all records
+        # fields only → extract from all records (size-aware paged)
         if fields:
-            shown = flat[:max_results]
-            projected = [self._project_fields(r, fields) for r in shown]
-            if projected and self._all_projections_null(projected):
+            projected_all = [self._project_fields(r, fields) for r in flat]
+            window = projected_all[offset : offset + max_results]
+            if window and self._all_projections_null(window):
                 # Surface a discoverable warning instead of silently returning
                 # a list of all-null dicts. Helps callers recover when field
                 # paths don't match the underlying record shape (e.g., CQL
@@ -234,23 +231,52 @@ class ResponseStoreModule(BaseModule):
                     "Tip: call get_stored_response(ref_id=..., record_index=0) to inspect the actual schema.",
                     "",
                     "Projected data (all nulls):",
-                    json.dumps(projected, indent=2, default=str),
+                    json.dumps(window, indent=2, default=str),
                 ]
-                return format_text_response("\n".join(warning_lines), raw=True)
-            body = json.dumps(projected, indent=2, default=str)
-            return format_text_response(
-                self._with_cap_notice(body, len(shown), len(flat)),
-                raw=True,
-            )
+                return "\n".join(warning_lines)
+            return self._emit_page(projected_all, offset=offset, max_results=max_results, ref_id=ref_id)
 
         return format_text_response(self._format_metadata(stored), raw=True)
 
-    @staticmethod
-    def _with_cap_notice(body: str, shown: int, total: int) -> str:
-        """Prefix a 'showing N of M' notice when the result set was capped."""
-        if total > shown:
-            return f"[Showing {shown} of {total} records; raise max_results to see more]\n{body}"
-        return body
+    # get_stored_response is the retrieval surface: keep each multi-record page
+    # comfortably under the large-response threshold so its own output is never
+    # re-truncated by format_text_response's forgot-to-store guard.
+    _PAGE_BYTE_BUDGET = 15000
+
+    @classmethod
+    def _fit_page(cls, records: list, offset: int, max_results: int) -> tuple[list, int, int]:
+        """Return (page, start, end): the largest prefix of records[offset:offset+max_results]
+        whose serialized size stays within the page budget. Always yields at least
+        one record when the window is non-empty, so a single oversized record still
+        comes back rather than vanishing.
+        """
+        total = len(records)
+        start = min(max(0, offset), total)
+        window = records[start : start + max_results]
+        page: list = []
+        size = 2  # for the enclosing [] brackets
+        for rec in window:
+            rec_size = len(json.dumps(rec, indent=2, default=str)) + 2
+            if page and size + rec_size > cls._PAGE_BYTE_BUDGET:
+                break
+            page.append(rec)
+            size += rec_size
+        return page, start, start + len(page)
+
+    def _emit_page(self, records: list, *, offset: int, max_results: int, ref_id: str) -> str:
+        """Render a size-bounded page of records with an actionable paging notice."""
+        total = len(records)
+        if offset >= total and total > 0:
+            return f"[page: offset {offset} is past the end ({total} records) of {ref_id}]"
+        page, start, end = self._fit_page(records, offset, max_results)
+        body = json.dumps(page, indent=2, default=str)
+        if start == 0 and end == total:
+            return body  # complete result in one page — no notice needed
+        if end < total:
+            notice = f"[page: records {start}–{end - 1} of {total} in {ref_id}; next offset={end}]"
+        else:
+            notice = f"[page: records {start}–{end - 1} of {total} in {ref_id}; end of results]"
+        return f"{notice}\n{body}"
 
     async def list_stored_responses(self) -> str:
         """List all stored response references."""
