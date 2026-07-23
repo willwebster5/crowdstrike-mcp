@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Annotated, Optional
 from crowdstrike_mcp.modules.base import BaseModule
 from crowdstrike_mcp.response_store import (
     ResponseStore,
+    metadata_context,
     schema_hint,
     select_records,
     top_level_keys,
@@ -102,6 +103,22 @@ def _stringify_record(record) -> str:
     return str(record)
 
 
+def _tombstone_error(ref_id: str, tomb: dict) -> str:
+    """Actionable miss error for an evicted ref: what it was, how to regenerate."""
+    tool = tomb.get("tool_name") or "unknown tool"
+    ctx = metadata_context(tomb.get("metadata"))
+    ctx_part = f" ({ctx})" if ctx else ""
+    if tomb.get("reason") == "ttl":
+        ttl_min = ResponseStore._ttl_seconds // 60
+        cause = f"expired ({ttl_min}-min TTL)"
+    else:
+        cause = "was evicted to make room for newer responses"
+    return (
+        f"Reference '{ref_id}' {cause}. It was {tool}{ctx_part} — "
+        "re-run that tool to regenerate the data."
+    )
+
+
 class ResponseStoreModule(BaseModule):
     """Provides tools to query stored structured data from truncated responses."""
 
@@ -161,6 +178,9 @@ class ResponseStoreModule(BaseModule):
         offset = max(0, offset)
         stored = ResponseStore.get(ref_id)
         if not stored:
+            tomb = ResponseStore.get_tombstone(ref_id)
+            if tomb:
+                return format_text_response(_tombstone_error(ref_id, tomb), raw=True)
             available = ResponseStore.list_refs()
             if available:
                 ref_list = ", ".join(r["ref_id"] for r in available)
