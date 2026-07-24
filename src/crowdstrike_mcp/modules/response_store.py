@@ -13,7 +13,14 @@ import re
 from typing import TYPE_CHECKING, Annotated, Optional
 
 from crowdstrike_mcp.modules.base import BaseModule
-from crowdstrike_mcp.response_store import ResponseStore, select_records
+from crowdstrike_mcp.response_store import (
+    ResponseStore,
+    format_fields_line,
+    metadata_context,
+    schema_hint,
+    select_records,
+    top_level_keys,
+)
 from crowdstrike_mcp.utils import format_text_response
 
 if TYPE_CHECKING:
@@ -97,6 +104,19 @@ def _stringify_record(record) -> str:
     return str(record)
 
 
+def _tombstone_error(ref_id: str, tomb: dict) -> str:
+    """Actionable miss error for an evicted ref: what it was, how to regenerate."""
+    tool = tomb.get("tool_name") or "unknown tool"
+    ctx = metadata_context(tomb.get("metadata"))
+    ctx_part = f" ({ctx})" if ctx else ""
+    if tomb.get("reason") == "ttl":
+        ttl_min = ResponseStore._ttl_seconds // 60
+        cause = f"expired ({ttl_min}-min TTL)"
+    else:
+        cause = "was evicted to make room for newer responses"
+    return f"Reference '{ref_id}' {cause}. It was {tool}{ctx_part} — re-run that tool to regenerate the data."
+
+
 class ResponseStoreModule(BaseModule):
     """Provides tools to query stored structured data from truncated responses."""
 
@@ -125,6 +145,9 @@ class ResponseStoreModule(BaseModule):
                 "Array indexing: a field path may index into a list value with "
                 "`[n]` (0-based, negatives allowed), e.g. "
                 "`Ngsiem.event.usernames[3]` or `events[0].name`.\n\n"
+                'Full records: pass `fields="*"` to page through complete '
+                "records (combine with `offset`/`max_results`) instead of "
+                "fetching them one `record_index` at a time.\n\n"
                 "Paging: large fields/search results are returned one page at a "
                 "time within a safe size budget. Each page prints a notice like "
                 "`[page: records 0-41 of 200 ...; next offset=42]`; pass that "
@@ -153,6 +176,9 @@ class ResponseStoreModule(BaseModule):
         offset = max(0, offset)
         stored = ResponseStore.get(ref_id)
         if not stored:
+            tomb = ResponseStore.get_tombstone(ref_id)
+            if tomb:
+                return format_text_response(_tombstone_error(ref_id, tomb), raw=True)
             available = ResponseStore.list_refs()
             if available:
                 ref_list = ", ".join(r["ref_id"] for r in available)
@@ -207,10 +233,15 @@ class ResponseStoreModule(BaseModule):
         if search is not None:
             all_matches = [r for r in flat if search.lower() in _stringify_record(r).lower()]
             if not all_matches:
-                return format_text_response(
-                    f"No records matching '{search}' in {ref_id}.",
-                    raw=True,
-                )
+                lines = [
+                    f"No records matching '{search}' in {ref_id} (searched {len(flat)} records).",
+                    "Search is a case-insensitive substring match over all record values.",
+                ]
+                entries = schema_hint(flat)
+                if entries:
+                    lines.append(f"Available fields: {format_fields_line(entries)}")
+                lines.append("Tip: try a shorter substring, or project candidate fields with fields=...")
+                return format_text_response("\n".join(lines), raw=True)
             result_set = [self._project_fields(m, fields) for m in all_matches] if fields else all_matches
             return self._emit_page(result_set, offset=offset, max_results=max_results, ref_id=ref_id)
 
@@ -218,7 +249,7 @@ class ResponseStoreModule(BaseModule):
         if fields:
             projected_all = [self._project_fields(r, fields) for r in flat]
             window = projected_all[offset : offset + max_results]
-            if window and self._all_projections_null(window):
+            if window and not self._is_wildcard(fields) and self._all_projections_null(window):
                 # Surface a discoverable warning instead of silently returning
                 # a list of all-null dicts. Helps callers recover when field
                 # paths don't match the underlying record shape (e.g., CQL
@@ -227,7 +258,7 @@ class ResponseStoreModule(BaseModule):
                 warning_lines = [
                     "Warning: all requested fields returned null for every record.",
                     f"Requested fields: {fields}",
-                    f"Available top-level keys: [{', '.join(top_keys) if top_keys else '(none)'}]",
+                    f"Available top-level keys: [{format_fields_line(top_keys) if top_keys else '(none)'}]",
                     "Tip: call get_stored_response(ref_id=..., record_index=0) to inspect the actual schema.",
                     "",
                     "Projected data (all nulls):",
@@ -299,46 +330,13 @@ class ResponseStoreModule(BaseModule):
 
     @staticmethod
     def _top_level_keys(records: list[dict]) -> list[str]:
-        """Union of top-level keys across all dict records, preserving first-seen order."""
-        seen: dict[str, None] = {}
-        for r in records:
-            if isinstance(r, dict):
-                for k in r.keys():
-                    seen.setdefault(k, None)
-        return list(seen.keys())
+        """Union of top-level keys across all dict records (shared helper)."""
+        return top_level_keys(records)
 
     @classmethod
     def _schema_hint(cls, records: list[dict]) -> list[str]:
-        """Build a schema hint listing top-level keys and one level of nested subkeys.
-
-        For each top-level key seen across records:
-          * If its value is a dict in any record, list the subkeys as
-            ``parent.child`` entries.
-          * Otherwise, list just the top-level key name.
-
-        Intended to help callers discover the actual field paths in stored data
-        without needing to fetch a full record first.
-        """
-        top_keys = cls._top_level_keys(records)
-        if not top_keys:
-            return []
-        # Collect nested subkeys: {parent_key: ordered-list of subkeys}
-        nested: dict[str, dict[str, None]] = {k: {} for k in top_keys}
-        for r in records:
-            if not isinstance(r, dict):
-                continue
-            for k, v in r.items():
-                if isinstance(v, dict):
-                    for sk in v.keys():
-                        nested[k].setdefault(sk, None)
-        entries: list[str] = []
-        for k in top_keys:
-            subs = list(nested.get(k, {}).keys())
-            if subs:
-                entries.extend(f"{k}.{sk}" for sk in subs)
-            else:
-                entries.append(k)
-        return entries
+        """Available field paths in stored records (shared helper)."""
+        return schema_hint(records)
 
     @classmethod
     def _format_metadata(cls, stored) -> str:
@@ -380,9 +378,16 @@ class ResponseStoreModule(BaseModule):
         return "\n".join(lines)
 
     @staticmethod
+    def _is_wildcard(fields_str: str) -> bool:
+        """True if the fields spec requests full records (contains a bare "*")."""
+        return "*" in [f.strip() for f in fields_str.split(",")]
+
+    @staticmethod
     def _project_fields(record: dict, fields_str: str) -> dict:
-        """Extract dot-path fields from a record."""
+        """Extract dot-path fields from a record. A "*" entry returns it whole."""
         field_list = [f.strip() for f in fields_str.split(",") if f.strip()]
+        if "*" in field_list:
+            return record
         result = {}
         for f in field_list:
             result[f] = _get_nested(record, f)

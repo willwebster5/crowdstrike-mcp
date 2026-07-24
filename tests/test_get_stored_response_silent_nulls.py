@@ -173,6 +173,13 @@ class TestAllNullFieldsWarning:
         assert parsed[0]["source.ip"] == "10.1.75.3"
         assert parsed[0]["Vendor.userIdentity.arn"].startswith("arn:aws:")
 
+    def test_all_null_warning_caps_wide_key_list(self, module):
+        """A wide schema's top-level key list is capped like the search-miss message."""
+        wide_record = {f"k_{i:03d}": i for i in range(60)}
+        ref_id = ResponseStore.store({"records": [wide_record]}, tool_name="test")
+        result = asyncio.run(module.get_stored_response(ref_id=ref_id, fields="nope1,nope2"))
+        assert "(+20 more)" in result
+
 
 # ---------------------------------------------------------------------------
 # Fix 3: Tool description documents field path differences

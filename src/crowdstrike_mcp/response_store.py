@@ -105,6 +105,87 @@ def select_records(data: dict) -> list:
     return []
 
 
+# Metadata keys used (in order) to build the truncation-notice context line.
+_CONTEXT_KEYS = ("detection_id", "query", "filter")
+
+
+def top_level_keys(records: list) -> list[str]:
+    """Union of top-level keys across all dict records, preserving first-seen order."""
+    seen: dict[str, None] = {}
+    for r in records:
+        if isinstance(r, dict):
+            for k in r.keys():
+                seen.setdefault(k, None)
+    return list(seen.keys())
+
+
+def schema_hint(records: list) -> list[str]:
+    """Available field paths: top-level keys, with dict values expanded one level.
+
+    For each top-level key seen across records, list ``parent.child`` entries
+    when the value is a dict in any record, else the bare key. Helps callers
+    discover real field paths without fetching a full record first.
+    """
+    keys = top_level_keys(records)
+    if not keys:
+        return []
+    nested: dict[str, dict[str, None]] = {k: {} for k in keys}
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        for k, v in r.items():
+            if isinstance(v, dict):
+                for sk in v.keys():
+                    nested[k].setdefault(sk, None)
+    entries: list[str] = []
+    for k in keys:
+        subs = list(nested.get(k, {}).keys())
+        if subs:
+            entries.extend(f"{k}.{sk}" for sk in subs)
+        else:
+            entries.append(k)
+    return entries
+
+
+def format_fields_line(entries: list[str], max_entries: int = 40, max_chars: int = 600) -> str:
+    """Join field entries into a display line capped by count and length.
+
+    Whichever cap is hit first wins; omitted entries are summarized as
+    ``(+N more)`` so the caller knows the list is truncated.
+    """
+    if not entries:
+        return ""
+    shown: list[str] = []
+    length = 0
+    for e in entries[:max_entries]:
+        added = len(e) + (2 if shown else 0)  # ", " separator
+        if shown and length + added > max_chars:
+            break
+        shown.append(e)
+        length += added
+    line = ", ".join(shown)
+    omitted = len(entries) - len(shown)
+    if omitted > 0:
+        line += f" (+{omitted} more)"
+    return line
+
+
+def metadata_context(metadata: dict | None) -> str:
+    """First useful ``key: value`` context pair from stored metadata, or ''.
+
+    Values are flattened to one line and capped so free-form query strings
+    can't break single-line notices/errors that embed this context.
+    """
+    for key in _CONTEXT_KEYS:
+        val = (metadata or {}).get(key)
+        if val:
+            flat = " ".join(str(val).split())
+            if len(flat) > 200:
+                flat = flat[:200] + "…"
+            return f"{key}: {flat}"
+    return ""
+
+
 @dataclass
 class StoredResponse:
     """A stored structured response from an MCP tool."""
@@ -136,6 +217,15 @@ class ResponseStore:
     # Falcon data stays resident). Mirrors the 25-min auth-session window.
     _ttl_seconds: int = 25 * 60
 
+    # session_id -> (ref_id -> tombstone dict), ordered oldest-first. A tombstone
+    # records what an evicted ref *was* (tool + metadata, no payload) so a miss
+    # can tell the caller how to regenerate the data. Wiped with the partition —
+    # metadata can embed query strings, which must not outlive the credential.
+    # Note: tombstone metadata has no TTL of its own, so it may persist past the
+    # data's 25-min bound until partition wipe or cap displacement.
+    _tombstones: "dict[str, OrderedDict[str, dict]]" = {}
+    _tombstone_cap: int = 50
+
     @classmethod
     def store(
         cls,
@@ -152,6 +242,7 @@ class ResponseStore:
                 while len(cls._sessions) >= cls._max_sessions:
                     old_sk, _ = cls._sessions.popitem(last=False)
                     cls._counters.pop(old_sk, None)
+                    cls._tombstones.pop(old_sk, None)
                 entries = OrderedDict()
                 cls._sessions[sk] = entries
                 cls._counters[sk] = 0
@@ -161,7 +252,8 @@ class ResponseStore:
             ref_id = f"resp_{cls._counters[sk]:03d}"
 
             if len(entries) >= cls._max_entries:
-                entries.popitem(last=False)  # evict least-recently-used in this session
+                _, evicted = entries.popitem(last=False)  # evict least-recently-used in this session
+                cls._add_tombstone(sk, evicted, "lru")
 
             entries[ref_id] = StoredResponse(
                 ref_id=ref_id,
@@ -184,6 +276,7 @@ class ResponseStore:
             if sr is None:
                 return None
             if cls._is_expired(sr):
+                cls._add_tombstone(_session_id.get(), sr, "ttl")
                 del entries[ref_id]
                 return None
             entries.move_to_end(ref_id)  # reading refreshes LRU recency
@@ -209,11 +302,34 @@ class ResponseStore:
             ]
 
     @classmethod
+    def _add_tombstone(cls, session_id: str, sr: StoredResponse, reason: str) -> None:
+        """Record an eviction (caller holds the lock). reason: 'lru' | 'ttl'."""
+        stones = cls._tombstones.setdefault(session_id, OrderedDict())
+        stones[sr.ref_id] = {
+            "tool_name": sr.tool_name,
+            "metadata": sr.metadata,
+            "evicted_at": datetime.now(timezone.utc),
+            "reason": reason,
+        }
+        while len(stones) > cls._tombstone_cap:
+            stones.popitem(last=False)
+
+    @classmethod
+    def get_tombstone(cls, ref_id: str) -> dict | None:
+        """Tombstone for an evicted ref in the current session, or None."""
+        with cls._lock:
+            stones = cls._tombstones.get(_session_id.get())
+            if not stones:
+                return None
+            return stones.get(ref_id)
+
+    @classmethod
     def clear_session(cls, session_id: str) -> None:
         """Drop a session's entire partition (e.g. when its auth session is evicted)."""
         with cls._lock:
             cls._sessions.pop(session_id, None)
             cls._counters.pop(session_id, None)
+            cls._tombstones.pop(session_id, None)
 
     @classmethod
     def clear_credential_sessions(cls, cred_key: str) -> None:
@@ -226,10 +342,12 @@ class ResponseStore:
         """
         with cls._lock:
             prefix = f"{cred_key}{_CONNECTION_SEP}"
-            owned = [sk for sk in cls._sessions if sk == cred_key or sk.startswith(prefix)]
+            candidates = set(cls._sessions) | set(cls._tombstones)
+            owned = [sk for sk in candidates if sk == cred_key or sk.startswith(prefix)]
             for sk in owned:
                 cls._sessions.pop(sk, None)
                 cls._counters.pop(sk, None)
+                cls._tombstones.pop(sk, None)
 
     @classmethod
     def _is_expired(cls, sr: StoredResponse) -> bool:
@@ -248,10 +366,7 @@ class ResponseStore:
         with cls._lock:
             cls._sessions.clear()
             cls._counters.clear()
-
-
-# Metadata keys used (in order) to build the truncation-notice context line.
-_CONTEXT_KEYS = ("detection_id", "query", "filter")
+            cls._tombstones.clear()
 
 
 def build_truncation_notice(
@@ -262,6 +377,7 @@ def build_truncation_notice(
     record_count: int,
     tool_name: str,
     metadata: dict | None,
+    data: dict | None = None,
 ) -> str:
     """Build the truncation notice for a large, stored response.
 
@@ -269,15 +385,19 @@ def build_truncation_notice(
     it lives here rather than in the generic text formatter. The record-key hint
     is driven by a generic ``record_key`` metadata field (``triggering_pid`` is
     accepted as a back-compat alias) — the formatter need not know either name.
+    When ``data`` is provided, a capped ``Fields:`` line surfaces available
+    field paths so the first extraction call is informed, not guessed.
     """
     metadata = metadata or {}
 
-    context_line = ""
-    for key in _CONTEXT_KEYS:
-        val = metadata.get(key)
-        if val:
-            context_line = f"\nTool: {tool_name} | {key}: {val}"
-            break
+    ctx = metadata_context(metadata)
+    context_line = f"\nTool: {tool_name} | {ctx}" if ctx else ""
+
+    fields_line = ""
+    if data is not None:
+        entries = schema_hint(select_records(data))
+        if entries:
+            fields_line = f"\nFields: {format_fields_line(entries)}"
 
     record_key = metadata.get("record_key") or metadata.get("triggering_pid")
     if record_key:
@@ -294,11 +414,12 @@ def build_truncation_notice(
         summary,
         "",
         f"--- RESPONSE TRUNCATED ({text_len:,} chars) ---",
-        f"Structured data stored as: {ref_id} ({record_count} records){context_line}",
+        f"Structured data stored as: {ref_id} ({record_count} records){context_line}{fields_line}",
         "",
         "To query this data use the get_stored_response tool:",
         f'  get_stored_response(ref_id="{ref_id}")                                → metadata overview',
         f'  get_stored_response(ref_id="{ref_id}", fields="source.ip,user.name")  → extract fields',
+        f'  get_stored_response(ref_id="{ref_id}", fields="*")                    → full records (paged)',
         f'  get_stored_response(ref_id="{ref_id}", search="keyword")              → search records',
         *last_lines,
     ]
