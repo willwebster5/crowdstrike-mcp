@@ -902,7 +902,11 @@ class NGSIEMModule(BaseModule):
             "\n".join([*header, *body]),
             tool_name="ngsiem_get_lookup_file",
             raw=True,
-            structured_data={"filename": filename, "search_domain": search_domain, "size_bytes": len(raw), "content": text},
+            # Nested under "records" deliberately: ResponseStore.select_records
+            # finds nothing in a flat dict of scalars, so a bare
+            # {"filename": ..., "content": ...} payload would mint a ref_id that
+            # get_stored_response cannot read back — worse than no ref at all.
+            structured_data={"records": [{"filename": filename, "search_domain": search_domain, "size_bytes": len(raw), "content": text}]},
             metadata={"filename": filename, "search_domain": search_domain},
             # Whenever we withhold lines, guarantee a ref: a small file that
             # still exceeds the preview would otherwise have no recovery path

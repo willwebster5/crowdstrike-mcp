@@ -209,7 +209,13 @@ class CaseManagementModule(BaseModule):
                     lines.append(f"   Description: {c['description']}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="case_query",
+            raw=True,
+            structured_data=result,
+            metadata={"filter": filter, "status": status, "q": q},
+        )
 
     async def case_get(
         self,
@@ -252,7 +258,17 @@ class CaseManagementModule(BaseModule):
             lines.append("```")
             lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        # A long-running case (months of appended timeline, dozens of tags) blows
+        # past the 20k render threshold easily. Without structured_data the tail
+        # was simply dropped with no ref to recover it — a plausible-looking
+        # response missing most of its content, which is worse than an error.
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="case_get",
+            raw=True,
+            structured_data=result,
+            metadata={"case_ids": case_ids},
+        )
 
     async def case_create(
         self,
