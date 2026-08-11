@@ -589,6 +589,18 @@ class NGSIEMModule(BaseModule):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _pagination_total(result: dict) -> int | None:
+        """Total record count the API reports, or None if it didn't say.
+
+        These endpoints return meta.pagination.total alongside the page. We
+        discarded it and rendered only the fetched count, so a capped call read
+        as a complete inventory.
+        """
+        meta = (result.get("body") or {}).get("meta") or {}
+        total = (meta.get("pagination") or {}).get("total")
+        return total if isinstance(total, int) else None
+
+    @staticmethod
     def _as_name_fql(filter_: str | None) -> str | None:
         """Normalize a caller's filter into the FQL these endpoints demand.
 
@@ -648,6 +660,7 @@ class NGSIEMModule(BaseModule):
         filter_: str | None,
         limit: int,
         detail: bool,
+        offset: int = 0,
         meta_extra: dict | None = None,
     ) -> str:
         """Shared formatter for the compact/detail list tools."""
@@ -660,12 +673,21 @@ class NGSIEMModule(BaseModule):
         records = result["resources"] or []
         if not detail:
             records = self._project_compact(records)
-        header = [
-            f"{label} ({len(records)} result{'s' if len(records) != 1 else ''}):",
-        ]
+        # Report the API's own total, not just how many we fetched. Rendering
+        # only the fetched count made `limit=2` indistinguishable from "there
+        # are 2 parsers" — the tenant has 304.
+        total = self._pagination_total(result)
+        if total is None:
+            header = [f"{label} ({len(records)} result{'s' if len(records) != 1 else ''}):"]
+        else:
+            header = [f"{label}: {len(records)} returned (of {total} total)"]
         if filter_:
             header.append(f"Filter: {filter_}")
         header.append(f"Limit: {limit}")
+        if offset:
+            header.append(f"Offset: {offset}")
+        if total is not None and offset + len(records) < total:
+            header.append(f"More available — re-call with offset={offset + len(records)}")
         header.append(f"Detail: {detail}")
         header.append("")
         if not records:
@@ -794,13 +816,15 @@ class NGSIEMModule(BaseModule):
         filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
+        offset: Annotated[int, "0-based record offset for paging past `limit` (see the header hint)"] = 0,
         search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
         """Enumerate saved NGSIEM searches (enrichment functions, etc.)."""
         limit = min(max(limit, 1), 1000)
+        offset = max(offset, 0)
         falcon = self._service(NGSIEM)
         fql = self._as_name_fql(filter)
-        kwargs: dict = {"limit": limit, "search_domain": search_domain}
+        kwargs: dict = {"limit": limit, "search_domain": search_domain, "offset": offset}
         if fql:
             kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_saved_queries, "list_saved_queries", **kwargs)
@@ -811,6 +835,7 @@ class NGSIEMModule(BaseModule):
             filter_=fql,
             limit=limit,
             detail=detail,
+            offset=offset,
             meta_extra={"search_domain": search_domain},
         )
 
@@ -839,13 +864,15 @@ class NGSIEMModule(BaseModule):
         filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
+        offset: Annotated[int, "0-based record offset for paging past `limit` (see the header hint)"] = 0,
         search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
         """Enumerate NGSIEM lookup files."""
         limit = min(max(limit, 1), 1000)
+        offset = max(offset, 0)
         falcon = self._service(NGSIEM)
         fql = self._as_name_fql(filter)
-        kwargs: dict = {"limit": limit, "search_domain": search_domain}
+        kwargs: dict = {"limit": limit, "search_domain": search_domain, "offset": offset}
         if fql:
             kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_lookup_files, "list_lookup_files", **kwargs)
@@ -856,6 +883,7 @@ class NGSIEMModule(BaseModule):
             filter_=fql,
             limit=limit,
             detail=detail,
+            offset=offset,
             meta_extra={"search_domain": search_domain},
         )
 
@@ -935,13 +963,15 @@ class NGSIEMModule(BaseModule):
         filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
+        offset: Annotated[int, "0-based record offset for paging past `limit` (see the header hint)"] = 0,
         search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
         """Enumerate NGSIEM dashboards."""
         limit = min(max(limit, 1), 1000)
+        offset = max(offset, 0)
         falcon = self._service(NGSIEM)
         fql = self._as_name_fql(filter)
-        kwargs: dict = {"limit": limit, "search_domain": search_domain}
+        kwargs: dict = {"limit": limit, "search_domain": search_domain, "offset": offset}
         if fql:
             kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_dashboards, "list_dashboards", **kwargs)
@@ -952,6 +982,7 @@ class NGSIEMModule(BaseModule):
             filter_=fql,
             limit=limit,
             detail=detail,
+            offset=offset,
             meta_extra={"search_domain": search_domain},
         )
 
@@ -960,14 +991,16 @@ class NGSIEMModule(BaseModule):
         filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
+        offset: Annotated[int, "0-based record offset for paging past `limit` (see the header hint)"] = 0,
     ) -> str:
         """Enumerate NGSIEM parsers."""
         limit = min(max(limit, 1), 1000)
+        offset = max(offset, 0)
         falcon = self._service(NGSIEM)
         fql = self._as_name_fql(filter)
         # Parsers are scoped by `repository`, not `search_domain`, and the API
         # accepts exactly one value — so this is supplied rather than exposed.
-        kwargs: dict = {"limit": limit, "repository": PARSERS_REPOSITORY}
+        kwargs: dict = {"limit": limit, "repository": PARSERS_REPOSITORY, "offset": offset}
         if fql:
             kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_parsers, "list_parsers", **kwargs)
@@ -978,6 +1011,7 @@ class NGSIEMModule(BaseModule):
             filter_=fql,
             limit=limit,
             detail=detail,
+            offset=offset,
             meta_extra={"repository": PARSERS_REPOSITORY},
         )
 
