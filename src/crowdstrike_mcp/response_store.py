@@ -390,8 +390,18 @@ def build_truncation_notice(
     """
     metadata = metadata or {}
 
+    # The tool name is reported whenever it is known, not only when the metadata
+    # also yields a context string. A notice that cannot say which tool produced
+    # it makes the result harder to act on and much harder to report (#52).
     ctx = metadata_context(metadata)
-    context_line = f"\nTool: {tool_name} | {ctx}" if ctx else ""
+    if tool_name and ctx:
+        context_line = f"\nTool: {tool_name} | {ctx}"
+    elif tool_name:
+        context_line = f"\nTool: {tool_name}"
+    elif ctx:
+        context_line = f"\n{ctx}"
+    else:
+        context_line = ""
 
     fields_line = ""
     if data is not None:

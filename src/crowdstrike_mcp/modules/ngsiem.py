@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Annotated, Optional
 
+import requests
 from falconpy import NGSIEM
 
 from crowdstrike_mcp.modules.base import BaseModule
@@ -46,6 +47,27 @@ DEFAULT_TIMEOUT_SECONDS = 300
 # and paged, so a higher default is safe.
 DEFAULT_INLINE_ROWS = 50
 MAX_INLINE_ROWS = 1000
+
+# The NGSIEM content-management endpoints are scoped by a query param the API
+# requires and falconpy does not default. Omitting it is an unconditional HTTP
+# 400 ("missing search_domain query param" / "missing repository query param"),
+# so every tool below failed on every call — including the no-argument form.
+# The param is not optional in any meaningful sense; it just had no default.
+DEFAULT_SEARCH_DOMAIN = "all"
+SEARCH_DOMAINS = ("all", "falcon", "third-party", "dashboards", "parsers-repository")
+
+# Parsers are scoped by `repository` rather than `search_domain`, and the API
+# accepts exactly one value for it.
+PARSERS_REPOSITORY = "parsers-repository"
+
+_SEARCH_DOMAIN_HELP = f"Search domain to scope the request. One of: {', '.join(SEARCH_DOMAINS)}. Default '{DEFAULT_SEARCH_DOMAIN}' (everything)."
+
+# A caller-supplied filter is already FQL if it looks like `field:...`.
+_FQL_SHAPED = re.compile(r"^\s*[A-Za-z_][\w.]*\s*:")
+
+# Lookup files are downloads, not records: the GET returns the file bytes. Cap
+# what we render inline by default so a 80k-row CSV doesn't flood the context.
+LOOKUP_PREVIEW_LINES = 10
 
 
 class NGSIEMModule(BaseModule):
@@ -98,13 +120,20 @@ class NGSIEMModule(BaseModule):
             server,
             self.ngsiem_list_lookup_files,
             name="ngsiem_list_lookup_files",
-            description="Enumerate NGSIEM lookup files (compact projection by default).",
+            description=(
+                "Enumerate NGSIEM lookup files (compact projection by default). Pass a bare "
+                "name substring as filter — it is wrapped into the FQL the API requires."
+            ),
         )
         self._add_tool(
             server,
             self.ngsiem_get_lookup_file,
             name="ngsiem_get_lookup_file",
-            description="Fetch a lookup file; metadata only unless include_content=True.",
+            description=(
+                "Download a lookup file by filename (e.g. 'cato-users.csv'). Returns size, line "
+                "count and a short preview; pass include_content=True for the whole file. The full "
+                "content is always retrievable via get_stored_response."
+            ),
         )
         self._add_tool(
             server,
@@ -247,11 +276,20 @@ class NGSIEMModule(BaseModule):
                 force_store=bool(events),
             )
         else:
-            error_text = (
-                f"NGSIEM Query Failed:\nError: {result.get('error', 'Unknown error')}\n"
-                f"\nPlease ensure:\n1. Query syntax is valid CQL\n"
-                f"2. Time range is reasonable\n3. Try simpler queries first"
-            )
+            error = result.get("error", "Unknown error")
+            if result.get("syntax_diagnostic"):
+                # LogScale told us the exact token and the exact reason. The
+                # generic checklist below competes with that answer and points
+                # at the wrong causes (connectivity, time range), so drop it.
+                # Emit raw — the caret markers are aligned to the source columns
+                # and are destroyed by any reflowing.
+                error_text = f"NGSIEM Query Failed:\n{error}"
+            else:
+                error_text = (
+                    f"NGSIEM Query Failed:\nError: {error}\n"
+                    f"\nPlease ensure:\n1. Query syntax is valid CQL\n"
+                    f"2. Time range is reasonable\n3. Try simpler queries first"
+                )
             return format_text_response(error_text, raw=True)
 
     # ------------------------------------------------------------------
@@ -290,6 +328,71 @@ class NGSIEMModule(BaseModule):
             except (ValueError, TypeError):
                 display_rows = DEFAULT_INLINE_ROWS
         return min(max(display_rows, 1), MAX_INLINE_ROWS)
+
+    def _raw_start_search_error(self, repo: str, query: str, search_kwargs: dict) -> str | None:
+        """Recover LogScale's text/plain syntax diagnostic that falconpy discards.
+
+        falconpy parses every response body as JSON. A CQL syntax error is
+        returned as ``text/plain``, so ``json.loads`` raises and falconpy's
+        handler — reading the exception as "no content" rather than "not JSON" —
+        substitutes its own "No content was received for this request." string
+        without ever touching ``response.text``. The real diagnostic (named
+        error codes, per-token carets) is lost before any caller sees it.
+
+        This re-issues the same POST with ``requests`` so the raw body survives.
+        Best-effort by design: any failure here returns None and the caller falls
+        back to the parsed-envelope path. It must never raise, because it runs
+        while we are already reporting an error.
+
+        ``query`` is deliberately the caller's own query, NOT the timestamped
+        copy sent on the primary path: LogScale reports the offending line
+        number, and the injected ``// MCP Query`` audit comment shifts every
+        line by one. Sending the plain query makes the reported line numbers
+        match what the caller actually wrote.
+
+        Returns the diagnostic text, or None if nothing was recoverable.
+        """
+        try:
+            auth = self._get_auth()
+            base_url = (auth.base_url or "").rstrip("/")
+            token = auth.token_value
+            if not base_url or not token:
+                return None
+
+            payload = {
+                "queryString": query,
+                "start": search_kwargs.get("start"),
+                "isLive": False,
+            }
+            if search_kwargs.get("end") is not None:
+                payload["end"] = search_kwargs["end"]
+
+            resp = requests.post(
+                f"{base_url}/humio/api/v1/repositories/{repo}/queryjobs",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=30,
+            )
+        except Exception:  # noqa: BLE001 — diagnostics must never mask the verdict
+            return None
+
+        if resp.status_code == 200:
+            # Raced a transient failure: the query parses after all. We have just
+            # created a real query job, so stop it rather than orphaning it —
+            # the primary path cleans up after itself and this must too.
+            try:
+                job_id = (resp.json() or {}).get("id")
+            except ValueError:
+                job_id = None
+            if job_id:
+                try:
+                    self._service(NGSIEM).stop_search(repository=repo, id=job_id)
+                except Exception:  # noqa: BLE001
+                    self._log(f"Failed to stop raced query job {job_id} in {repo}")
+            return None
+
+        detail = (resp.text or "").strip()
+        return detail or None
 
     def _execute_query(
         self,
@@ -358,6 +461,31 @@ class NGSIEMModule(BaseModule):
             response = falcon.start_search(**search_kwargs)
 
             if response["status_code"] != 200:
+                status = response["status_code"]
+
+                # A CQL syntax error comes back as HTTP 400 with a text/plain
+                # body carrying LogScale's full diagnostic — named error codes
+                # and caret markers under the offending column, the same linting
+                # the Falcon console shows. falconpy never surfaces it: its
+                # JSONDecodeError handler assumes a non-JSON body means an EMPTY
+                # body and raises NoContentWarning without reading response.text
+                # (_util/_functions.py). The caller then receives a fabricated
+                # {"errors": [{"message": "No content was received for this
+                # request."}]}, which is both wrong and actively misleading.
+                # Re-issue the request raw to recover what was thrown away.
+                # Scoped to 400 so auth/scope/transport failures (which DO return
+                # parseable JSON) don't pay for a duplicate round trip.
+                if status == 400:
+                    diagnostic = self._raw_start_search_error(repo, query, search_kwargs)
+                    if diagnostic:
+                        # Self-describing: _execute_query is also called by
+                        # AlertsModule, which only ever reads ["error"].
+                        return {
+                            "success": False,
+                            "error": f"CQL syntax error (HTTP {status}):\n{diagnostic}",
+                            "syntax_diagnostic": True,
+                        }
+
                 error_details = []
 
                 resources = response.get("resources", {})
@@ -377,12 +505,12 @@ class NGSIEMModule(BaseModule):
                             error_details.append(str(error))
 
                 if not error_details:
-                    error_details = [f"HTTP {response['status_code']} error"]
+                    error_details = [f"HTTP {status} error"]
 
                 error_msg = "; ".join(error_details)
                 return {
                     "success": False,
-                    "error": f"Failed to start search (HTTP {response['status_code']}): {error_msg}",
+                    "error": f"Failed to start search (HTTP {status}): {error_msg}",
                 }
 
             search_id = response.get("resources", {}).get("id")
@@ -459,6 +587,28 @@ class NGSIEMModule(BaseModule):
     # ------------------------------------------------------------------
     # Shared unwrap helper (FR 07 read-expansion tools)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _as_name_fql(filter_: str | None) -> str | None:
+        """Normalize a caller's filter into the FQL these endpoints demand.
+
+        The NGSIEM content endpoints only accept ``name:~'value'`` and reject
+        anything else with "invalid fql syntax". A bare substring is the natural
+        thing to pass — and passing it used to produce a confusing dual error
+        alongside the missing-scope one — so wrap it here instead of making every
+        caller know the shape. An already-FQL-shaped filter is passed through
+        untouched.
+        """
+        if not filter_:
+            return None
+        cleaned = filter_.strip()
+        if not cleaned:
+            return None
+        if _FQL_SHAPED.match(cleaned):
+            return cleaned
+        # Single quotes terminate the FQL literal; drop them rather than
+        # emitting a filter the API will reject.
+        return f"name:~'{cleaned.replace(chr(39), '')}'"
 
     _COMPACT_LIST_FIELDS = ("id", "name", "last_modified", "state", "status")
 
@@ -580,6 +730,13 @@ class NGSIEMModule(BaseModule):
         except Exception as exc:
             return {"success": False, "error": f"{operation} call error: {exc}"}
 
+        # Download endpoints (get_lookup_file) return the file itself, not an
+        # envelope — falconpy hands back raw bytes with no status_code to read.
+        # Calling .get() on that is an AttributeError outside the try above, so
+        # it would surface as a server crash rather than a result.
+        if isinstance(response, (bytes, bytearray)):
+            return {"success": True, "content": bytes(response), "resources": [], "body": {}}
+
         status = response.get("status_code", 0)
         body = response.get("body", {}) or {}
 
@@ -618,33 +775,42 @@ class NGSIEMModule(BaseModule):
 
     async def ngsiem_list_saved_queries(
         self,
-        filter: Annotated[Optional[str], "FQL filter (optional)"] = None,
+        filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
+        search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
         """Enumerate saved NGSIEM searches (enrichment functions, etc.)."""
         limit = min(max(limit, 1), 1000)
         falcon = self._service(NGSIEM)
-        kwargs: dict = {"limit": limit}
-        if filter:
-            kwargs["filter"] = filter
+        fql = self._as_name_fql(filter)
+        kwargs: dict = {"limit": limit, "search_domain": search_domain}
+        if fql:
+            kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_saved_queries, "list_saved_queries", **kwargs)
         return self._format_list(
             result,
             tool_name="ngsiem_list_saved_queries",
             label="Saved Queries",
-            filter_=filter,
+            filter_=fql,
             limit=limit,
             detail=detail,
+            meta_extra={"search_domain": search_domain},
         )
 
     async def ngsiem_get_saved_query_template(
         self,
-        id: Annotated[str, "Saved query ID"],
+        id: Annotated[str, "Saved query ID (from ngsiem_list_saved_queries)"],
+        search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
         """Fetch the live body + metadata of one saved NGSIEM search."""
         falcon = self._service(NGSIEM)
-        result = self._call_and_unwrap(falcon.get_saved_query_template, "get_saved_query_template", ids=id)
+        result = self._call_and_unwrap(
+            falcon.get_saved_query_template,
+            "get_saved_query_template",
+            ids=id,
+            search_domain=search_domain,
+        )
         return self._format_single(
             result,
             tool_name="ngsiem_get_saved_query_template",
@@ -654,101 +820,158 @@ class NGSIEMModule(BaseModule):
 
     async def ngsiem_list_lookup_files(
         self,
-        filter: Annotated[Optional[str], "FQL filter (optional)"] = None,
+        filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
+        search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
         """Enumerate NGSIEM lookup files."""
         limit = min(max(limit, 1), 1000)
         falcon = self._service(NGSIEM)
-        kwargs: dict = {"limit": limit}
-        if filter:
-            kwargs["filter"] = filter
+        fql = self._as_name_fql(filter)
+        kwargs: dict = {"limit": limit, "search_domain": search_domain}
+        if fql:
+            kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_lookup_files, "list_lookup_files", **kwargs)
         return self._format_list(
             result,
             tool_name="ngsiem_list_lookup_files",
             label="Lookup Files",
-            filter_=filter,
+            filter_=fql,
             limit=limit,
             detail=detail,
+            meta_extra={"search_domain": search_domain},
         )
 
     async def ngsiem_get_lookup_file(
         self,
-        id: Annotated[str, "Lookup file ID"],
-        include_content: Annotated[bool, "Return file content, not just metadata"] = False,
+        filename: Annotated[str, "Lookup file name including extension, e.g. 'cato-users.csv' (from ngsiem_list_lookup_files)"],
+        include_content: Annotated[bool, "Render the whole file inline. Default False returns size + header + a short preview."] = False,
+        search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
-        """Fetch a lookup file — metadata only unless include_content=True."""
+        """Fetch a lookup file — preview by default, whole file with include_content=True.
+
+        This endpoint is a *download*: it returns the file bytes, not a record
+        with a strippable "content" field. The previous implementation both
+        addressed it by the wrong parameter (``ids`` where the API wants
+        ``filename``) and assumed a metadata shape the API never returns.
+        """
         falcon = self._service(NGSIEM)
-        result = self._call_and_unwrap(falcon.get_lookup_file, "get_lookup_file", ids=id)
-        if result.get("success") and not include_content:
-            # Strip content from each record client-side; metadata fields retained.
-            stripped: list = []
-            for rec in result["resources"] or []:
-                if isinstance(rec, dict):
-                    stripped.append({k: v for k, v in rec.items() if k != "content"})
-                else:
-                    stripped.append(rec)
-            result["resources"] = stripped
-        return self._format_single(
-            result,
+        result = self._call_and_unwrap(
+            falcon.get_lookup_file,
+            "get_lookup_file",
+            filename=filename,
+            search_domain=search_domain,
+        )
+        if not result.get("success"):
+            return format_text_response(
+                f"ngsiem_get_lookup_file failed:\n{result.get('error', 'Unknown error')}",
+                tool_name="ngsiem_get_lookup_file",
+                raw=True,
+            )
+
+        raw = result.get("content")
+        if raw is None:
+            # Defensive: an envelope rather than a download. Render it as-is
+            # rather than claiming a zero-byte file.
+            return self._format_single(
+                result,
+                tool_name="ngsiem_get_lookup_file",
+                label="Lookup File",
+                identifier=filename,
+            )
+
+        text = raw.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        header = [
+            f"Lookup File ({filename}):",
+            f"Search domain: {search_domain}",
+            f"Size: {len(raw):,} bytes",
+            f"Lines: {len(lines):,}",
+            "",
+        ]
+        truncated = False
+        if include_content:
+            body = lines
+        else:
+            body = lines[:LOOKUP_PREVIEW_LINES]
+            truncated = len(lines) > LOOKUP_PREVIEW_LINES
+            if truncated:
+                body = [*body, f"... and {len(lines) - LOOKUP_PREVIEW_LINES:,} more lines (pass include_content=True for the whole file)"]
+        return format_text_response(
+            "\n".join([*header, *body]),
             tool_name="ngsiem_get_lookup_file",
-            label="Lookup File",
-            identifier=id,
+            raw=True,
+            # Nested under "records" deliberately: ResponseStore.select_records
+            # finds nothing in a flat dict of scalars, so a bare
+            # {"filename": ..., "content": ...} payload would mint a ref_id that
+            # get_stored_response cannot read back — worse than no ref at all.
+            structured_data={"records": [{"filename": filename, "search_domain": search_domain, "size_bytes": len(raw), "content": text}]},
+            metadata={"filename": filename, "search_domain": search_domain},
+            # Whenever we withhold lines, guarantee a ref: a small file that
+            # still exceeds the preview would otherwise have no recovery path
+            # short of re-calling with include_content=True.
+            force_store=truncated,
         )
 
     async def ngsiem_list_dashboards(
         self,
-        filter: Annotated[Optional[str], "FQL filter (optional)"] = None,
+        filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
+        search_domain: Annotated[str, _SEARCH_DOMAIN_HELP] = DEFAULT_SEARCH_DOMAIN,
     ) -> str:
         """Enumerate NGSIEM dashboards."""
         limit = min(max(limit, 1), 1000)
         falcon = self._service(NGSIEM)
-        kwargs: dict = {"limit": limit}
-        if filter:
-            kwargs["filter"] = filter
+        fql = self._as_name_fql(filter)
+        kwargs: dict = {"limit": limit, "search_domain": search_domain}
+        if fql:
+            kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_dashboards, "list_dashboards", **kwargs)
         return self._format_list(
             result,
             tool_name="ngsiem_list_dashboards",
             label="Dashboards",
-            filter_=filter,
+            filter_=fql,
             limit=limit,
             detail=detail,
+            meta_extra={"search_domain": search_domain},
         )
 
     async def ngsiem_list_parsers(
         self,
-        filter: Annotated[Optional[str], "FQL filter (optional)"] = None,
+        filter: Annotated[Optional[str], "Name substring, or FQL (name:~'value'). A bare substring is wrapped for you."] = None,
         limit: Annotated[int, "Max records (default 100, cap 1000)"] = 100,
         detail: Annotated[bool, "Return full records instead of compact projection"] = False,
     ) -> str:
         """Enumerate NGSIEM parsers."""
         limit = min(max(limit, 1), 1000)
         falcon = self._service(NGSIEM)
-        kwargs: dict = {"limit": limit}
-        if filter:
-            kwargs["filter"] = filter
+        fql = self._as_name_fql(filter)
+        # Parsers are scoped by `repository`, not `search_domain`, and the API
+        # accepts exactly one value — so this is supplied rather than exposed.
+        kwargs: dict = {"limit": limit, "repository": PARSERS_REPOSITORY}
+        if fql:
+            kwargs["filter"] = fql
         result = self._call_and_unwrap(falcon.list_parsers, "list_parsers", **kwargs)
         return self._format_list(
             result,
             tool_name="ngsiem_list_parsers",
             label="Parsers",
-            filter_=filter,
+            filter_=fql,
             limit=limit,
             detail=detail,
+            meta_extra={"repository": PARSERS_REPOSITORY},
         )
 
     async def ngsiem_get_parser(
         self,
-        id: Annotated[str, "Parser ID"],
+        id: Annotated[str, "Parser ID, e.g. '018bfba2b38a3734bf35cbc1fe4fffef:2.0.1' (from ngsiem_list_parsers)"],
     ) -> str:
         """Fetch a parser's live configuration + script."""
         falcon = self._service(NGSIEM)
-        result = self._call_and_unwrap(falcon.get_parser, "get_parser", ids=id)
+        result = self._call_and_unwrap(falcon.get_parser, "get_parser", ids=id, repository=PARSERS_REPOSITORY)
         return self._format_single(
             result,
             tool_name="ngsiem_get_parser",

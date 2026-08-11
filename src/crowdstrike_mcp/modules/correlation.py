@@ -242,7 +242,16 @@ class CorrelationModule(BaseModule):
         lines.append(json.dumps(export, indent=2, default=str))
         lines.append("```")
 
-        return format_text_response("\n".join(lines), raw=True)
+        # The full export is rendered inline; a rule with a long CQL body clears
+        # the 20k threshold, and without structured_data the tail is dropped with
+        # no way to recover it.
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="correlation_export_rule",
+            raw=True,
+            structured_data=result,
+            metadata={"rule_id": rule_id},
+        )
 
     # ------------------------------------------------------------------
     # Internal methods (logic from handlers/correlation_rules.py)
