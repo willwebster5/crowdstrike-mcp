@@ -614,13 +614,29 @@ class NGSIEMModule(BaseModule):
 
     @classmethod
     def _project_compact(cls, records: list) -> list:
-        """Return records filtered to the compact projection field set."""
+        """Return records filtered to the compact projection field set.
+
+        Key matching is case-INSENSITIVE. The parsers endpoint returns ``Name``
+        and ``ID`` where every other NGSIEM endpoint returns ``name`` and ``id``,
+        so a case-sensitive match projected every parser to ``{}`` — the tool
+        rendered "2 results" followed by two blank entries. That was invisible
+        until v5.9.0 unbroke the call itself, and invisible in testing because
+        detail=True skips this projection entirely.
+
+        A record that matches nothing falls through whole rather than rendering
+        blank: showing an unexpected shape beats silently showing nothing. The
+        caller-facing render caps at 50 records and truncates values at 300
+        chars, so the fallback stays bounded.
+        """
         projected = []
         for rec in records:
             if not isinstance(rec, dict):
                 projected.append(rec)
                 continue
-            projected.append({k: rec[k] for k in cls._COMPACT_LIST_FIELDS if k in rec})
+            # Canonical field order, original key spelling.
+            by_lower = {k.lower(): k for k in rec}
+            compact = {by_lower[f]: rec[by_lower[f]] for f in cls._COMPACT_LIST_FIELDS if f in by_lower}
+            projected.append(compact or rec)
         return projected
 
     def _format_list(
