@@ -125,7 +125,7 @@ class ResponseModule(BaseModule):
 
         # Step 4: Preview or execute
         if not confirm:
-            return format_text_response(self._format_contain_preview(device, reason, case_id), raw=True)
+            return format_text_response(self._format_contain_preview(device, reason, case_id), tool_name="host_contain", raw=True)
 
         # Step 5: Execute containment
         return self._execute_containment(device, "contain", reason, case_id)
@@ -156,7 +156,7 @@ class ResponseModule(BaseModule):
 
         # Step 3: Preview or execute
         if not confirm:
-            return format_text_response(self._format_lift_preview(device, reason, case_id), raw=True)
+            return format_text_response(self._format_lift_preview(device, reason, case_id), tool_name="host_lift_containment", raw=True)
 
         # Step 4: Execute lift
         return self._execute_containment(device, "lift_containment", reason, case_id)
@@ -299,7 +299,13 @@ class ResponseModule(BaseModule):
             if case_id:
                 lines.append(f"Case: {case_id}")
             lines.append(f"Audit entry written to: {self._audit_log_path}")
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name=f"host_{action_name}",
+                raw=True,
+                structured_data={"records": [{"device_id": device_id, "hostname": hostname, "action": action_name, "reason": reason, "case_id": case_id}]},
+                metadata={"device_id": device_id, "case_id": case_id},
+            )
 
         except Exception as e:
             return format_text_response(f"Containment action failed: {str(e)}", raw=True)

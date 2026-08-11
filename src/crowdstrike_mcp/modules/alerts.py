@@ -276,7 +276,13 @@ class AlertsModule(BaseModule):
                 "Note: CrowdStrike returned a spurious HTTP 500 for thirdparty alert(s); the update was verified applied by re-fetching (issue #21)."
             )
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="update_alert_status",
+            raw=True,
+            structured_data={"records": [result]},
+            metadata={"composite_ids": cleaned_ids},
+        )
 
     # ------------------------------------------------------------------
     # Internal methods (logic from handlers/alerts.py)

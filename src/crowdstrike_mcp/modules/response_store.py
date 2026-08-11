@@ -322,7 +322,7 @@ class ResponseStoreModule(BaseModule):
                 meta_parts = [f"{k}={v}" for k, v in r["metadata"].items() if v]
                 meta_str = f" ({', '.join(meta_parts)})" if meta_parts else ""
             lines.append(f"  {r['ref_id']}: {r['tool_name']} | {r['record_count']} records | {r['timestamp']}{meta_str}")
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response("\n".join(lines), tool_name="list_stored_responses", raw=True)
 
     # ------------------------------------------------------------------
     # Helpers

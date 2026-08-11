@@ -100,7 +100,18 @@ class CloudRegistrationModule(BaseModule):
                     lines.append(f"  Status: {a['status']}")
             lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cloud_list_accounts",
+            raw=True,
+            # `accounts` is keyed by provider; flatten so each account is its own
+            # record. ResponseStore.select_records would otherwise treat the whole
+            # dict as a single record, making record_index/search useless.
+            structured_data={
+                "records": [{**a, "provider": key} for key, value in accounts.items() if isinstance(value, list) for a in value],
+            },
+            metadata={"provider": provider},
+        )
 
     async def cloud_policy_settings(
         self,
@@ -133,7 +144,15 @@ class CloudRegistrationModule(BaseModule):
         if result["count"] > 30:
             lines.append(f"\n... and {result['count'] - 30} more policies")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cloud_policy_settings",
+            raw=True,
+            # The render caps at 30 policies; the store keeps all of them, so the
+            # "... and N more" line is actually followable.
+            structured_data={"records": result["policies"], "by_service": result["by_service"]},
+            metadata={"cloud_platform": cloud_platform, "service": service},
+        )
 
     # ------------------------------------------------------------------
     # Internal methods (logic from handlers/cloud_registration.py)
