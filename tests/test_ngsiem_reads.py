@@ -200,51 +200,63 @@ class TestListLookupFiles:
 
 
 class TestGetLookupFile:
-    FULL_RECORD = {
-        "id": "l1",
-        "name": "blocked_domains.csv",
-        "row_count": 385,
-        "schema": [{"name": "domain", "type": "string"}],
-        "content": "domain\nfoo.example\nbar.example\n",
-        "last_modified": "2026-04-10T00:00:00Z",
-    }
+    """Issue #52: this endpoint is a DOWNLOAD, not a record fetch.
 
-    def test_metadata_only_by_default(self, ngsiem_module):
-        ngsiem_module.falcon.get_lookup_file.return_value = {
-            "status_code": 200,
-            "body": {"resources": [self.FULL_RECORD]},
-        }
-        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(id="l1"))
+    The tests that lived here mocked a record with a strippable "content" field
+    and a "row_count" — a shape the API never returns. falconpy hands back raw
+    bytes, and the call 400'd before reaching any of that anyway (it was
+    addressed by `ids`, where the API wants `filename`, and omitted the required
+    `search_domain`). The old tests passed against a fiction, which is why the
+    defect survived: mock the real shape or the test proves nothing.
+    """
+
+    CSV = b"domain,note\nfoo.example,a\nbar.example,b\n"
+
+    def test_preview_by_default_reports_size_and_lines(self, ngsiem_module):
+        ngsiem_module.falcon.get_lookup_file.return_value = self.CSV
+        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(filename="blocked_domains.csv"))
         assert "blocked_domains.csv" in result
-        assert "385" in result
-        assert "foo.example" not in result  # content stripped
-        assert "bar.example" not in result
+        assert f"{len(self.CSV):,} bytes" in result
+        assert "Lines: 3" in result
+        assert "domain,note" in result  # header row is part of the preview
 
-    def test_include_content_true_returns_content(self, ngsiem_module):
-        ngsiem_module.falcon.get_lookup_file.return_value = {
-            "status_code": 200,
-            "body": {"resources": [self.FULL_RECORD]},
-        }
-        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(id="l1", include_content=True))
-        assert "foo.example" in result
-        assert "bar.example" in result
+    def test_long_file_is_truncated_with_a_recoverable_ref(self, ngsiem_module):
+        big = b"col\n" + b"\n".join(f"row{i}".encode() for i in range(500))
+        ngsiem_module.falcon.get_lookup_file.return_value = big
+        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(filename="big.csv"))
+        assert "row0" in result
+        assert "row499" not in result
+        assert "more lines" in result
+        assert "resp_" in result  # full content stays reachable via get_stored_response
 
-    def test_passes_id(self, ngsiem_module):
-        ngsiem_module.falcon.get_lookup_file.return_value = {
-            "status_code": 200,
-            "body": {"resources": []},
-        }
-        asyncio.run(ngsiem_module.ngsiem_get_lookup_file(id="abc"))
+    def test_include_content_true_returns_whole_file(self, ngsiem_module):
+        big = b"col\n" + b"\n".join(f"row{i}".encode() for i in range(20))
+        ngsiem_module.falcon.get_lookup_file.return_value = big
+        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(filename="big.csv", include_content=True))
+        assert "row0" in result
+        assert "row19" in result
+
+    def test_passes_filename_and_search_domain(self, ngsiem_module):
+        ngsiem_module.falcon.get_lookup_file.return_value = self.CSV
+        asyncio.run(ngsiem_module.ngsiem_get_lookup_file(filename="abc.csv"))
         kwargs = ngsiem_module.falcon.get_lookup_file.call_args.kwargs
-        assert kwargs["ids"] == "abc" or kwargs["ids"] == ["abc"]
+        assert kwargs["filename"] == "abc.csv"
+        assert kwargs["search_domain"] == "all"
+        assert "ids" not in kwargs  # the API ignores it; this is what 400'd
+
+    def test_undecodable_bytes_do_not_raise(self, ngsiem_module):
+        ngsiem_module.falcon.get_lookup_file.return_value = b"\xff\xfe not utf-8"
+        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(filename="weird.bin"))
+        assert "weird.bin" in result
 
     def test_handles_api_error(self, ngsiem_module):
         ngsiem_module.falcon.get_lookup_file.return_value = {
             "status_code": 404,
             "body": {"errors": [{"message": "Not found"}]},
         }
-        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(id="missing"))
+        result = asyncio.run(ngsiem_module.ngsiem_get_lookup_file(filename="missing"))
         assert "failed" in result.lower()
+        assert "Not found" in result
 
 
 class TestListDashboards:
