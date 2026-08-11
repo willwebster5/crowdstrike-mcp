@@ -27,6 +27,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "starlette>=0.27.0",
     "pyyaml>=6.0",
+    # Direct dependency: the NGSIEM module bypasses falconpy for one specific
+    # call (recovering the text/plain CQL diagnostic falconpy throws away).
+    # falconpy already pulls requests in transitively, but an import we make
+    # ourselves gets declared ourselves.
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]

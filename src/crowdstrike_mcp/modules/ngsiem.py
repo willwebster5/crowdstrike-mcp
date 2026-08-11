@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Annotated, Optional
 
+import requests
 from falconpy import NGSIEM
 
 from crowdstrike_mcp.modules.base import BaseModule
@@ -247,11 +248,20 @@ class NGSIEMModule(BaseModule):
                 force_store=bool(events),
             )
         else:
-            error_text = (
-                f"NGSIEM Query Failed:\nError: {result.get('error', 'Unknown error')}\n"
-                f"\nPlease ensure:\n1. Query syntax is valid CQL\n"
-                f"2. Time range is reasonable\n3. Try simpler queries first"
-            )
+            error = result.get("error", "Unknown error")
+            if result.get("syntax_diagnostic"):
+                # LogScale told us the exact token and the exact reason. The
+                # generic checklist below competes with that answer and points
+                # at the wrong causes (connectivity, time range), so drop it.
+                # Emit raw — the caret markers are aligned to the source columns
+                # and are destroyed by any reflowing.
+                error_text = f"NGSIEM Query Failed:\n{error}"
+            else:
+                error_text = (
+                    f"NGSIEM Query Failed:\nError: {error}\n"
+                    f"\nPlease ensure:\n1. Query syntax is valid CQL\n"
+                    f"2. Time range is reasonable\n3. Try simpler queries first"
+                )
             return format_text_response(error_text, raw=True)
 
     # ------------------------------------------------------------------
@@ -290,6 +300,71 @@ class NGSIEMModule(BaseModule):
             except (ValueError, TypeError):
                 display_rows = DEFAULT_INLINE_ROWS
         return min(max(display_rows, 1), MAX_INLINE_ROWS)
+
+    def _raw_start_search_error(self, repo: str, query: str, search_kwargs: dict) -> str | None:
+        """Recover LogScale's text/plain syntax diagnostic that falconpy discards.
+
+        falconpy parses every response body as JSON. A CQL syntax error is
+        returned as ``text/plain``, so ``json.loads`` raises and falconpy's
+        handler — reading the exception as "no content" rather than "not JSON" —
+        substitutes its own "No content was received for this request." string
+        without ever touching ``response.text``. The real diagnostic (named
+        error codes, per-token carets) is lost before any caller sees it.
+
+        This re-issues the same POST with ``requests`` so the raw body survives.
+        Best-effort by design: any failure here returns None and the caller falls
+        back to the parsed-envelope path. It must never raise, because it runs
+        while we are already reporting an error.
+
+        ``query`` is deliberately the caller's own query, NOT the timestamped
+        copy sent on the primary path: LogScale reports the offending line
+        number, and the injected ``// MCP Query`` audit comment shifts every
+        line by one. Sending the plain query makes the reported line numbers
+        match what the caller actually wrote.
+
+        Returns the diagnostic text, or None if nothing was recoverable.
+        """
+        try:
+            auth = self._get_auth()
+            base_url = (auth.base_url or "").rstrip("/")
+            token = auth.token_value
+            if not base_url or not token:
+                return None
+
+            payload = {
+                "queryString": query,
+                "start": search_kwargs.get("start"),
+                "isLive": False,
+            }
+            if search_kwargs.get("end") is not None:
+                payload["end"] = search_kwargs["end"]
+
+            resp = requests.post(
+                f"{base_url}/humio/api/v1/repositories/{repo}/queryjobs",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=30,
+            )
+        except Exception:  # noqa: BLE001 — diagnostics must never mask the verdict
+            return None
+
+        if resp.status_code == 200:
+            # Raced a transient failure: the query parses after all. We have just
+            # created a real query job, so stop it rather than orphaning it —
+            # the primary path cleans up after itself and this must too.
+            try:
+                job_id = (resp.json() or {}).get("id")
+            except ValueError:
+                job_id = None
+            if job_id:
+                try:
+                    self._service(NGSIEM).stop_search(repository=repo, id=job_id)
+                except Exception:  # noqa: BLE001
+                    self._log(f"Failed to stop raced query job {job_id} in {repo}")
+            return None
+
+        detail = (resp.text or "").strip()
+        return detail or None
 
     def _execute_query(
         self,
@@ -358,6 +433,31 @@ class NGSIEMModule(BaseModule):
             response = falcon.start_search(**search_kwargs)
 
             if response["status_code"] != 200:
+                status = response["status_code"]
+
+                # A CQL syntax error comes back as HTTP 400 with a text/plain
+                # body carrying LogScale's full diagnostic — named error codes
+                # and caret markers under the offending column, the same linting
+                # the Falcon console shows. falconpy never surfaces it: its
+                # JSONDecodeError handler assumes a non-JSON body means an EMPTY
+                # body and raises NoContentWarning without reading response.text
+                # (_util/_functions.py). The caller then receives a fabricated
+                # {"errors": [{"message": "No content was received for this
+                # request."}]}, which is both wrong and actively misleading.
+                # Re-issue the request raw to recover what was thrown away.
+                # Scoped to 400 so auth/scope/transport failures (which DO return
+                # parseable JSON) don't pay for a duplicate round trip.
+                if status == 400:
+                    diagnostic = self._raw_start_search_error(repo, query, search_kwargs)
+                    if diagnostic:
+                        # Self-describing: _execute_query is also called by
+                        # AlertsModule, which only ever reads ["error"].
+                        return {
+                            "success": False,
+                            "error": f"CQL syntax error (HTTP {status}):\n{diagnostic}",
+                            "syntax_diagnostic": True,
+                        }
+
                 error_details = []
 
                 resources = response.get("resources", {})
@@ -377,12 +477,12 @@ class NGSIEMModule(BaseModule):
                             error_details.append(str(error))
 
                 if not error_details:
-                    error_details = [f"HTTP {response['status_code']} error"]
+                    error_details = [f"HTTP {status} error"]
 
                 error_msg = "; ".join(error_details)
                 return {
                     "success": False,
-                    "error": f"Failed to start search (HTTP {response['status_code']}): {error_msg}",
+                    "error": f"Failed to start search (HTTP {status}): {error_msg}",
                 }
 
             search_id = response.get("resources", {}).get("id")
