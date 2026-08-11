@@ -147,14 +147,42 @@ def format_text_response(
     return result if raw else [{"type": "text", "text": result}]
 
 
-def _extract_summary(text: str, max_lines: int = 40) -> str:
+# Headroom reserved for the truncation notice that gets appended to the summary
+# (ref_id, field hints, usage examples). Measured at ~730 chars; 2,000 leaves room
+# for a long Fields: line without the assembled response exceeding the threshold
+# it was cut to fit.
+_NOTICE_RESERVE = 2000
+
+# Secondary bound so a pathological render of thousands of near-empty lines can't
+# turn the byte budget into an unreadable wall. Not the primary control — the byte
+# budget is — and set high enough that it never binds on real content: tool renders
+# average 30+ chars per line, so the budget alone caps them near 600 lines. An
+# earlier value of 400 silently bound FIRST on exactly the verbose six-lines-per-
+# record renderers this change exists to help, spending only 14k of 18k.
+_SUMMARY_MAX_LINES = 2000
+
+
+def _extract_summary(text: str, max_chars: int | None = None, max_lines: int = _SUMMARY_MAX_LINES) -> str:
     """Extract a useful summary from a large MCP response.
 
     Keeps header/metadata lines and the first data block, truncates bulk
     event/behavior JSON that makes up the majority of large responses.
+
+    The budget is in CHARACTERS, matching the threshold that decided to truncate
+    in the first place. This used to be a flat 40-line cap, which was unrelated
+    to the byte budget and left most of it unspent: correlation_list_rules
+    renders ~353 chars per record, so 40 lines returned 6 records and 1,860 of
+    the ~18,000 characters available — 90% of the budget thrown away. It also
+    penalised renderers arbitrarily, since a tool using six lines per record kept
+    a sixth as many records as one using a single line, for no reason anyone
+    chose. Filling the byte budget instead fits ~54 records in the same response.
     """
+    if max_chars is None:
+        max_chars = max(0, LARGE_RESPONSE_THRESHOLD - _NOTICE_RESERVE)
+
     lines = text.split("\n")
-    summary_lines = []
+    summary_lines: list[str] = []
+    used = 0
     data_blocks_seen = 0
     in_data_block = False
 
@@ -167,7 +195,13 @@ def _extract_summary(text: str, max_lines: int = 40) -> str:
             # Keep the first data block marker
             in_data_block = "```json" in line
 
+        # Stop before overflowing rather than after — but always take at least one
+        # line, so an oversized first line yields a summary instead of nothing.
+        cost = len(line) + 1  # +1 for the newline join
+        if summary_lines and used + cost > max_chars:
+            break
         summary_lines.append(line)
+        used += cost
 
         # End of first json block
         if in_data_block and line.strip() == "```" and len(summary_lines) > 1:
