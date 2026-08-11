@@ -47,6 +47,24 @@ try:
 except ImportError:
     _NGSIEM_AVAILABLE = False
 
+# update_alerts_v3 caps every action-parameter value. The API's own words are
+# "invalid action value specified. must be less than 1024" — so the longest
+# accepted value is 1023 characters. That error names neither the offending
+# field nor its length, and "action value" reads like the status or the tag
+# action rather than the comment, so the cause is not obvious from the message.
+# Detailed triage comments (IOCs, cross-source verification, recommendations)
+# clear 1024 easily, which makes this a recurring cost. Validate here instead.
+MAX_ACTION_VALUE_CHARS = 1023
+
+# Maps the API's action names back to the tool parameter the caller actually
+# passed, so an error can name something the caller can act on.
+_ACTION_TO_PARAM = {
+    "append_comment": "comment",
+    "add_tag": "tags",
+    "update_status": "status",
+    "assign_to_user_id": "assign_to_user_id",
+}
+
 
 class AlertsModule(BaseModule):
     """Alert retrieval, analysis, and status management across all detection types."""
@@ -101,7 +119,9 @@ class AlertsModule(BaseModule):
             description=(
                 "Update CrowdStrike alert status after triage/investigation. Supports status changes, "
                 "comments for audit trail, tags, and assigning/unassigning a user (by user ID / email). "
-                "Status is optional, so the tool can reassign without changing status."
+                "Status is optional, so the tool can reassign without changing status. "
+                f"NOTE: the API caps every value at {MAX_ACTION_VALUE_CHARS} characters — budget detailed "
+                "investigation comments accordingly, or split them across calls."
             ),
             tier="write",
             idempotent=True,
@@ -223,7 +243,7 @@ class AlertsModule(BaseModule):
         self,
         composite_ids: Annotated[list[str], "List of composite alert IDs to update"],
         status: Annotated[Optional[str], "New alert status ('new', 'in_progress', 'closed', 'reopened'). Optional — omit to leave unchanged."] = None,
-        comment: Annotated[Optional[str], "Comment for audit trail"] = None,
+        comment: Annotated[Optional[str], f"Comment for audit trail. Hard API limit: {MAX_ACTION_VALUE_CHARS} characters."] = None,
         tags: Annotated[Optional[list[str]], "Tags to add"] = None,
         assign_to_user_id: Annotated[Optional[str], "User ID / email to assign the alert to, e.g. 'analyst@example.com'"] = None,
         unassign: Annotated[bool, "Clear the current assignee. Mutually exclusive with assign_to_user_id."] = False,
@@ -440,6 +460,10 @@ class AlertsModule(BaseModule):
                 # CrowdStrike API: the value passed to `unassign` is ignored.
                 action_params.append({"name": "unassign", "value": ""})
 
+            oversized = self._oversized_action_value(action_params)
+            if oversized:
+                return {"success": False, "error": oversized}
+
             response = alerts.update_alerts_v3(
                 composite_ids=composite_ids,
                 action_parameters=action_params,
@@ -475,6 +499,31 @@ class AlertsModule(BaseModule):
             }
         except Exception as e:
             return {"success": False, "error": f"Error updating alerts: {str(e)}"}
+
+    @staticmethod
+    def _oversized_action_value(action_params: list[dict]) -> str | None:
+        """Return an actionable message if any action value exceeds the API cap.
+
+        The API's own rejection — "invalid action value specified. must be less
+        than 1024" — names neither the parameter nor its length, and "action
+        value" reads like the status or the tag action rather than the comment.
+        Catching it here means the caller learns which field, how long it is,
+        and by how much to cut, without a round trip.
+
+        Returns None when everything fits.
+        """
+        for param in action_params:
+            value = param.get("value") or ""
+            if len(value) <= MAX_ACTION_VALUE_CHARS:
+                continue
+            field = _ACTION_TO_PARAM.get(param.get("name", ""), param.get("name", "value"))
+            excess = len(value) - MAX_ACTION_VALUE_CHARS
+            return (
+                f"{field} is {len(value):,} characters; the CrowdStrike API rejects any action value "
+                f"longer than {MAX_ACTION_VALUE_CHARS:,}. Shorten it by {excess:,} character"
+                f"{'s' if excess != 1 else ''}, or split it across multiple calls."
+            )
+        return None
 
     def _verify_status_applied(self, alerts, composite_ids, expected_status) -> bool:
         """Re-fetch the alerts and confirm every one reached ``expected_status``.
