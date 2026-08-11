@@ -207,7 +207,13 @@ class RTRModule(BaseModule):
         lines.append(
             "Session auto-expires after 10 minutes idle. Use rtr_pulse_session to keep it alive; use rtr_execute_command to run allowlisted commands."
         )
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="rtr_init_session",
+            raw=True,
+            structured_data={"records": [s]},
+            metadata={"device_id": device_id},
+        )
 
     async def rtr_list_sessions(
         self,
@@ -229,7 +235,13 @@ class RTRModule(BaseModule):
                 if s.get("created_at") or s.get("updated_at"):
                     lines.append(f"   created: {s.get('created_at', '?')} | updated: {s.get('updated_at', '?')}")
                 lines.append("")
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="rtr_list_sessions",
+            raw=True,
+            structured_data={"records": sessions},
+            metadata={"ids": ids},
+        )
 
     async def rtr_pulse_session(
         self,
@@ -292,7 +304,13 @@ class RTRModule(BaseModule):
             lines.append("  queued_command_offline: True (will run on next check-in)")
         lines.append("")
         lines.append("Poll rtr_check_command_status(cloud_request_id, session_id) for output.")
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="rtr_execute_command",
+            raw=True,
+            structured_data={"records": [r]},
+            metadata={"session_id": session_id, "cloud_request_id": r.get("cloud_request_id")},
+        )
 
     async def rtr_check_command_status(
         self,
@@ -342,7 +360,13 @@ class RTRModule(BaseModule):
                 lines.append(f"{i}. **{f.get('name', '?')}** — sha256: {f.get('sha256', '?')}")
                 lines.append(f"   size: {f.get('size', '?')} | created: {f.get('created_at', '?')}")
                 lines.append("")
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="rtr_list_files",
+            raw=True,
+            structured_data={"records": files},
+            metadata={"session_id": session_id},
+        )
 
     async def rtr_get_extracted_file_contents(
         self,
@@ -365,7 +389,13 @@ class RTRModule(BaseModule):
             "The archive is a 7zip file password-protected with the password `infected` "
             "(standard CrowdStrike RTR convention). Extract with `7z x -pinfected <path>`.",
         ]
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="rtr_get_extracted_file_contents",
+            raw=True,
+            structured_data={"records": [{"path": path, "size": size}]},
+            metadata={"session_id": session_id},
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers (one per tool)

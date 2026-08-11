@@ -124,7 +124,13 @@ class CAOHuntingModule(BaseModule):
                         lines.append(f"   [{lang}]: {text[:200]}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cao_search_queries",
+            raw=True,
+            structured_data={"records": queries},
+            metadata={"filter": filter, "q": q, "max_results": max_results},
+        )
 
     async def cao_get_queries(
         self,
@@ -165,7 +171,13 @@ class CAOHuntingModule(BaseModule):
                         lines.append(f"   [{lang}]: {text[:200]}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cao_get_queries",
+            raw=True,
+            structured_data={"records": queries},
+            metadata={"ids": id_list},
+        )
 
     async def cao_search_guides(
         self,
@@ -204,7 +216,13 @@ class CAOHuntingModule(BaseModule):
                     lines.append(f"   Content: {g['content'][:300]}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cao_search_guides",
+            raw=True,
+            structured_data={"records": guides},
+            metadata={"filter": filter, "q": q, "max_results": max_results},
+        )
 
     async def cao_get_guides(
         self,
@@ -241,7 +259,13 @@ class CAOHuntingModule(BaseModule):
                     lines.append(f"   Content: {g['content'][:300]}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cao_get_guides",
+            raw=True,
+            structured_data={"records": guides},
+            metadata={"ids": id_list},
+        )
 
     async def cao_aggregate(
         self,
@@ -274,7 +298,13 @@ class CAOHuntingModule(BaseModule):
                 count = b.get("count", 0)
                 lines.append(f"  {label}: {count}")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cao_aggregate",
+            raw=True,
+            structured_data={"records": buckets},
+            metadata={"field": field, "type": type, "resource_type": resource_type, "filter": filter},
+        )
 
     # ------------------------------------------------------------------
     # Internal methods

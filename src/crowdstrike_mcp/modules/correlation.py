@@ -150,7 +150,13 @@ class CorrelationModule(BaseModule):
         if not rules:
             lines.append("No rules found matching the filters.")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="correlation_list_rules",
+            raw=True,
+            structured_data={"records": rules},
+            metadata={"enabled": enabled, "search": search, "max_results": max_results},
+        )
 
     async def correlation_get_rule(
         self,
@@ -189,7 +195,13 @@ class CorrelationModule(BaseModule):
             lines.append("```")
             lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="correlation_get_rule",
+            raw=True,
+            structured_data={"records": result.get("rules", [])},
+            metadata={"rule_ids": rule_ids},
+        )
 
     async def correlation_update_rule(
         self,
@@ -208,7 +220,7 @@ class CorrelationModule(BaseModule):
         if result.get("comment"):
             lines.append(f"Comment: {result['comment']}")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response("\n".join(lines), tool_name="correlation_update_rule", raw=True)
 
     async def correlation_export_rule(
         self,
@@ -445,7 +457,13 @@ class CorrelationModule(BaseModule):
             lines.append("```yaml")
             lines.append(yaml_str)
             lines.append("```")
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="correlation_import_to_iac",
+                raw=True,
+                structured_data={"records": [template]},
+                metadata={"rule_id": rule_id, "vendor": vendor, "dry_run": dry_run},
+            )
 
         # Write to file
         resource_id = template["resource_id"]
@@ -483,7 +501,7 @@ class CorrelationModule(BaseModule):
             "3. `python scripts/resource_deploy.py plan`",
             "4. `python scripts/resource_deploy.py apply`",
         ]
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response("\n".join(lines), tool_name="correlation_import_to_iac", raw=True)
 
     async def correlation_list_templates(
         self,
@@ -520,7 +538,13 @@ class CorrelationModule(BaseModule):
                 for i, tid in enumerate(template_ids, 1):
                     lines.append(f"{i}. {tid}")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="correlation_list_templates",
+                raw=True,
+                structured_data={"records": template_ids},
+                metadata={"filter": filter, "limit": limit, "offset": offset},
+            )
         except Exception as e:
             return format_text_response(f"Failed to list templates: {e}", raw=True)
 
@@ -573,7 +597,13 @@ class CorrelationModule(BaseModule):
                 lines.append("```")
                 lines.append("")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="correlation_get_template",
+                raw=True,
+                structured_data={"records": resources},
+                metadata={"template_ids": template_ids},
+            )
         except Exception as e:
             return format_text_response(f"Failed to get templates: {e}", raw=True)
 

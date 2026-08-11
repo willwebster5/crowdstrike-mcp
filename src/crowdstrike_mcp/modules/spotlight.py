@@ -161,7 +161,13 @@ class SpotlightModule(BaseModule):
             lines.append(json.dumps(resources, indent=2, default=str))
             lines.append("```")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="spotlight_supported_evaluations",
+                raw=True,
+                structured_data={"resources": resources},
+                metadata={"filter": filter},
+            )
         except Exception as e:
             return format_text_response(f"Failed to get supported evaluations: {e}", raw=True)
 
@@ -191,7 +197,13 @@ class SpotlightModule(BaseModule):
         else:
             for i, vid in enumerate(ids, 1):
                 lines.append(f"{i}. {vid}")
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="spotlight_query_vulnerabilities",
+            raw=True,
+            structured_data={"records": ids},
+            metadata={"filter": filter, "total": result.get("total"), "after": result.get("after")},
+        )
 
     async def spotlight_get_vulnerabilities(
         self,
@@ -219,7 +231,13 @@ class SpotlightModule(BaseModule):
                     app_names = [a.get("product_name_version", "") for a in v["apps"][:3]]
                     lines.append(f"   Apps: {'; '.join(a for a in app_names if a)}")
                 lines.append("")
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="spotlight_get_vulnerabilities",
+            raw=True,
+            structured_data={"vulnerabilities": resources},
+            metadata={"ids": ids},
+        )
 
     async def spotlight_vulnerabilities_combined(
         self,
@@ -255,7 +273,13 @@ class SpotlightModule(BaseModule):
                 if rem.get("reference"):
                     lines.append(f"   Reference: {rem['reference']}")
                 lines.append("")
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="spotlight_get_remediations",
+            raw=True,
+            structured_data={"resources": resources},
+            metadata={"ids": ids},
+        )
 
     async def spotlight_host_vulns(
         self,

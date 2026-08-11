@@ -314,7 +314,13 @@ class CaseManagementModule(BaseModule):
         if tags:
             lines.append(f"- **Tags**: {', '.join(tags)}")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="case_create",
+            raw=True,
+            structured_data={"records": [case]},
+            metadata={"case_id": case.get("id"), "name": name},
+        )
 
     async def case_update(
         self,
@@ -346,7 +352,13 @@ class CaseManagementModule(BaseModule):
         for field, value in updates.items():
             lines.append(f"- **{field}**: {value}")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="case_update",
+            raw=True,
+            structured_data={"records": [result.get("updates", {})]},
+            metadata={"case_id": case_id},
+        )
 
     async def case_add_alert_evidence(
         self,
@@ -469,7 +481,13 @@ class CaseManagementModule(BaseModule):
             lines.append(json.dumps(result.get("raw", []), indent=2, default=str))
             lines.append("```")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="case_get_fields",
+            raw=True,
+            structured_data={"records": fields or result.get("raw", [])},
+            metadata={},
+        )
 
     async def case_query_access_tags(
         self,
@@ -502,7 +520,13 @@ class CaseManagementModule(BaseModule):
                 for i, tag_id in enumerate(tag_ids, 1):
                     lines.append(f"{i}. {tag_id}")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="case_query_access_tags",
+                raw=True,
+                structured_data={"records": tag_ids},
+                metadata={"filter": filter, "limit": limit, "offset": offset},
+            )
         except Exception as e:
             return format_text_response(f"Failed to query access tags: {e}", raw=True)
 
@@ -538,7 +562,13 @@ class CaseManagementModule(BaseModule):
             if not resources:
                 lines.append("No access tags found for the provided IDs.")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="case_get_access_tags",
+                raw=True,
+                structured_data={"records": resources},
+                metadata={"tag_ids": tag_ids},
+            )
         except Exception as e:
             return format_text_response(f"Failed to get access tags: {e}", raw=True)
 
@@ -574,7 +604,13 @@ class CaseManagementModule(BaseModule):
             lines.append(json.dumps(resources, indent=2, default=str))
             lines.append("```")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="case_aggregate_access_tags",
+                raw=True,
+                structured_data={"records": resources},
+                metadata={"field": field, "type": type, "filter": filter},
+            )
         except Exception as e:
             return format_text_response(f"Failed to aggregate access tags: {e}", raw=True)
 
@@ -612,7 +648,13 @@ class CaseManagementModule(BaseModule):
             lines.append(json.dumps(resources, indent=2, default=str))
             lines.append("```")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="case_get_rtr_file_metadata",
+                raw=True,
+                structured_data={"records": resources},
+                metadata={"case_id": case_id},
+            )
         except Exception as e:
             return format_text_response(f"Failed to get RTR file metadata: {e}", raw=True)
 
@@ -646,7 +688,13 @@ class CaseManagementModule(BaseModule):
             lines.append(json.dumps(resources, indent=2, default=str))
             lines.append("```")
 
-            return format_text_response("\n".join(lines), raw=True)
+            return format_text_response(
+                "\n".join(lines),
+                tool_name="case_get_rtr_recent_files",
+                raw=True,
+                structured_data={"records": resources},
+                metadata={"case_id": case_id},
+            )
         except Exception as e:
             return format_text_response(f"Failed to get RTR recent files: {e}", raw=True)
 

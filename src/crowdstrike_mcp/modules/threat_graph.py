@@ -145,7 +145,13 @@ class ThreatGraphModule(BaseModule):
             # Invalidate then re-read so the cache picks up the fresh response
             self._edge_type_cache.invalidate()
             body = self._edge_type_cache.read()
-            return format_text_response(body, raw=True)
+            return format_text_response(
+                body,
+                tool_name="threatgraph_get_edge_types",
+                raw=True,
+                structured_data={"records": [{"edge_types": body}]},
+                metadata={},
+            )
         except Exception as e:
             return format_text_response(f"Failed to get edge types: {e}", raw=True)
 

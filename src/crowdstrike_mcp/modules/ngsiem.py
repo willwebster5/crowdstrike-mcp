@@ -290,7 +290,7 @@ class NGSIEMModule(BaseModule):
                     f"\nPlease ensure:\n1. Query syntax is valid CQL\n"
                     f"2. Time range is reasonable\n3. Try simpler queries first"
                 )
-            return format_text_response(error_text, raw=True)
+            return format_text_response(error_text, tool_name="ngsiem_query", raw=True)
 
     # ------------------------------------------------------------------
     # Internal query execution (also called by AlertsModule)

@@ -275,7 +275,13 @@ class CloudSecurityModule(BaseModule):
                     lines.append(f"   {r['rule_description'][:200]}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cloud_get_risks",
+            raw=True,
+            structured_data={"risks": risks},
+            metadata={"severity": severity, "status": status, "provider": provider, "account_id": account_id},
+        )
 
     async def cloud_get_iom_detections(
         self,
@@ -314,7 +320,13 @@ class CloudSecurityModule(BaseModule):
                     lines.append(f"   Console: {d['console_url']}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cloud_get_iom_detections",
+            raw=True,
+            structured_data={"records": detections},
+            metadata={"severity": severity, "provider": provider, "account_id": account_id, "resource_type": resource_type},
+        )
 
     async def cloud_query_assets(
         self,
@@ -364,7 +376,13 @@ class CloudSecurityModule(BaseModule):
                         lines.append(f"   Relationship: {rel.get('relationship_name', '')} {rel.get('resource_type', '')} ({rel.get('resource_id', '')})")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cloud_query_assets",
+            raw=True,
+            structured_data={"records": assets},
+            metadata={"provider": provider, "account_id": account_id, "resource_type": resource_type, "region": region},
+        )
 
     async def cloud_compliance_by_account(
         self,
@@ -394,7 +412,13 @@ class CloudSecurityModule(BaseModule):
                     lines.append(f"   Severities: {json.dumps(c['severities'])}")
                 lines.append("")
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cloud_compliance_by_account",
+            raw=True,
+            structured_data={"records": entries},
+            metadata={"max_results": max_results},
+        )
 
     async def cloud_get_risk_timeline(
         self,
@@ -487,7 +511,13 @@ class CloudSecurityModule(BaseModule):
                     f"{row.get('event_name', '')} by {row.get('user_name', row.get('user_id', ''))}"
                 )
 
-        return format_text_response("\n".join(lines), raw=True)
+        return format_text_response(
+            "\n".join(lines),
+            tool_name="cloud_get_risk_timeline",
+            raw=True,
+            structured_data={"records": tl, "risks": result.get("risks", [])},
+            metadata={"asset_id": asset_id, "risk_id": risk_id, "since": since},
+        )
 
     # ------------------------------------------------------------------
     # Internal methods (logic from handlers/cloud_security.py)
