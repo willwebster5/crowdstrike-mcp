@@ -22,7 +22,18 @@ classifiers = [
 ]
 dependencies = [
     "crowdstrike-falconpy>=1.6.1",
-    "mcp>=1.12.1",
+    # Upper bound is deliberate. mcp 2.0.0 (2026-07-28) removed
+    # mcp.server.fastmcp, which server.py and every module import — CI went from
+    # green to "ModuleNotFoundError: No module named 'mcp.server.fastmcp'" at
+    # collection time without a single source change, and stayed latently broken
+    # until the next run happened to be a PR. An unpinned major means breakage
+    # arrives on an upstream release schedule rather than on a commit, and lands
+    # on whichever PR is open at the time.
+    #
+    # Verified 2026-08-11: the suite is green on 1.13.1 and on 1.29.0 (the latest
+    # 1.x), and fails to import on 2.0.0. Adopting mcp 2.x is a real migration
+    # and belongs in its own PR. Raise this bound as part of that work.
+    "mcp>=1.12.1,<2",
     "uvicorn>=0.27.0",
     "python-dotenv>=1.0.0",
     "starlette>=0.27.0",
