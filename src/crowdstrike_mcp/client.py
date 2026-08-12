@@ -29,6 +29,48 @@ from crowdstrike_mcp import __version__ as SERVER_VERSION
 
 USER_AGENT = f"crowdstrike-custom-mcp/{SERVER_VERSION} (falconpy/{_FALCONPY_VERSION}; Python/{platform.python_version()})"
 
+# Per-request ceiling for every outbound Falcon call, in seconds.
+#
+# falconpy defaults to timeout=None — no timeout at all — so a socket that goes
+# quiet never returns and the calling thread is parked forever. That is how a
+# transient network blip turned into a permanently wedged server: the call never
+# came back, and nothing downstream could tell "slow" from "dead".
+#
+# This bounds a single HTTP request, not a whole search. NGSIEM searches poll,
+# so a long hunt is many short requests governed by FALCON_MCP_NGSIEM_TIMEOUT;
+# no individual one should ever take a minute.
+DEFAULT_HTTP_TIMEOUT_SECONDS = 60
+
+
+def _resolve_http_timeout() -> float:
+    """Resolve the per-request timeout from the environment.
+
+    Anything unusable — unset, unparseable, zero or negative — falls back to the
+    default. Zero and negative are rejected rather than passed through because
+    falconpy reads a falsy timeout as "no timeout", which would reinstate the
+    original hang through configuration alone.
+    """
+    raw = os.environ.get("FALCON_MCP_HTTP_TIMEOUT", "").strip()
+    if not raw:
+        return DEFAULT_HTTP_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        print(
+            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (not a number); "
+            f"using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
+            file=sys.stderr,
+        )
+        return DEFAULT_HTTP_TIMEOUT_SECONDS
+    if value <= 0:
+        print(
+            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (must be > 0); "
+            f"using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
+            file=sys.stderr,
+        )
+        return DEFAULT_HTTP_TIMEOUT_SECONDS
+    return value
+
 
 class FalconClient:
     """Shared CrowdStrike API client with OAuth2 credential chain."""
@@ -74,11 +116,15 @@ class FalconClient:
                 "Cannot access auth_object on a deferred FalconClient. Use BaseModule._get_auth() which resolves from the session ContextVar."
             )
         if self._auth is None:
+            # timeout propagates to every service class built with
+            # auth_object=this, and to the token request itself, so this single
+            # setting bounds every outbound call the server makes.
             self._auth = OAuth2(
                 client_id=self._client_id,
                 client_secret=self._client_secret,
                 base_url=self._base_url,
                 user_agent=USER_AGENT,
+                timeout=_resolve_http_timeout(),
             )
         return self._auth
 

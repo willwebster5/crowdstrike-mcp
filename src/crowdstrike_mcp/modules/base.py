@@ -9,6 +9,9 @@ Each module:
 
 from __future__ import annotations
 
+import asyncio
+import functools
+import inspect
 import sys
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
@@ -27,6 +30,80 @@ _VALID_TIERS = {"read", "write"}
 # Each asyncio task gets its own context copy, so concurrent requests are isolated.
 # Canonical location — common/session_auth.py imports this.
 _session_client: ContextVar["FalconClient | None"] = ContextVar("_session_client", default=None)
+
+
+def _offloaded(method: Callable) -> Callable:
+    """Wrap a tool so its body runs off the asyncio event loop.
+
+    Every tool is declared ``async def``, but the bodies are synchronous falconpy
+    calls — falconpy is built on ``requests`` — plus, in the NGSIEM search path, a
+    ``time.sleep()`` poll loop. None of that yields. A coroutine that never awaits
+    holds the event loop from its first statement to its last, so a single
+    in-flight call starved every other tool on the process: concurrent calls did
+    not merely queue, they could not start.
+
+    That is what made one stalled Falcon request look like a dead server. The
+    giveaway in the field report was that ``ngsiem_list_lookup_files`` — which
+    never touches queryjobs — hung exactly like a search, which is only possible
+    if the two share something. What they share is this loop.
+
+    Offloading is applied here, at the single registration seam, rather than in
+    ~60 individual handlers, so a tool added later cannot forget it.
+
+    The signature is preserved deliberately: FastMCP derives each tool's JSON
+    input schema from it, so a wrapper that collapsed it into ``**kwargs`` would
+    publish every tool with an empty schema. See ``_resolved_signature`` for why
+    ``functools.wraps`` alone is not enough here.
+
+    ``asyncio.to_thread`` copies the current context into the worker, so the
+    ``_session_client`` ContextVar that HTTP mode sets per request still resolves
+    correctly inside the thread.
+    """
+    if inspect.iscoroutinefunction(method):
+
+        @functools.wraps(method)
+        async def wrapper(*args, **kwargs):
+            # The coroutine is created here but driven to completion by a fresh
+            # loop inside the worker thread, leaving the server's own loop free.
+            return await asyncio.to_thread(asyncio.run, method(*args, **kwargs))
+
+    else:
+
+        @functools.wraps(method)
+        async def wrapper(*args, **kwargs):
+            return await asyncio.to_thread(functools.partial(method, *args, **kwargs))
+
+    wrapper.__signature__ = _resolved_signature(method)
+    return wrapper
+
+
+def _resolved_signature(method: Callable) -> inspect.Signature:
+    """Return ``method``'s signature with its annotations already evaluated.
+
+    Modules use ``from __future__ import annotations``, so every annotation
+    reaches FastMCP as a string. FastMCP evaluates those strings against
+    ``func.__globals__`` — and ``__globals__`` is a read-only attribute bound to
+    the module a function was *defined* in, which ``functools.wraps`` cannot
+    copy. A wrapper defined here would therefore have its tool schema resolved
+    against ``base.py``'s namespace, where ``Annotated`` and the modules' own
+    types do not exist.
+
+    Evaluating the annotations here, while we still hold the original function
+    and can reach its real globals, sidesteps that: FastMCP then receives
+    concrete type objects with nothing left to resolve.
+
+    Failure is raised, not swallowed. Registration happens at startup, so a
+    broken annotation surfaces immediately and loudly; degrading to an
+    unresolved signature would instead publish a tool whose input schema is
+    silently wrong.
+    """
+    try:
+        return inspect.signature(method, eval_str=True)
+    except Exception as exc:  # pragma: no cover - a startup-time programming error
+        raise RuntimeError(
+            f"Could not resolve type annotations for tool {getattr(method, '__qualname__', method)!r}. "
+            "The MCP input schema would be published incorrectly."
+        ) from exc
 
 
 class BaseModule(ABC):
@@ -120,7 +197,7 @@ class BaseModule(ABC):
         kwargs = {"name": name, "annotations": self._annotations(name, tier, destructive, idempotent)}
         if description:
             kwargs["description"] = description
-        server.tool(**kwargs)(method)
+        server.tool(**kwargs)(_offloaded(method))
         self.tools.append(name)
 
     @staticmethod
