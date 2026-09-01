@@ -244,6 +244,4 @@ class TestUpdateRule:
         result = correlation_module._update_rule("rule-uuid-123", True, comment="turning it on")
 
         assert result["success"] is True
-        correlation_module.falcon.update_rule.assert_called_once_with(
-            body=[{"id": "rule-uuid-123", "enabled": True, "comment": "turning it on"}]
-        )
+        correlation_module.falcon.update_rule.assert_called_once_with(body=[{"id": "rule-uuid-123", "enabled": True, "comment": "turning it on"}])
