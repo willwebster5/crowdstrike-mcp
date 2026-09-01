@@ -237,3 +237,19 @@ class TestToolRegistration:
         correlation_module.register_tools(server)
         assert "correlation_import_to_iac" not in correlation_module.tools
         assert "correlation_update_rule" not in correlation_module.tools
+
+
+class TestUpdateRule:
+    """Test _update_rule calls the correct falconpy method (non-harness path)."""
+
+    def test_calls_update_rule_singular(self, correlation_module):
+        """CorrelationRules exposes update_rule (singular), not update_rules."""
+        correlation_module.falcon.update_rule.return_value = {
+            "status_code": 200,
+            "body": {"resources": [{"id": "rule-uuid-123", "enabled": True}]},
+        }
+
+        result = correlation_module._update_rule("rule-uuid-123", True, comment="turning it on")
+
+        assert result["success"] is True
+        correlation_module.falcon.update_rule.assert_called_once_with(body=[{"id": "rule-uuid-123", "enabled": True, "comment": "turning it on"}])
