@@ -105,10 +105,18 @@ class TestRuleToYamlConversion:
         template = correlation_module._rule_to_template(MOCK_RULE, "aws")
         assert template["resource_id"] == "aws_-_cloudtrail_-_suspicious_iam_activity"
 
-    def test_disabled_rule_maps_to_disabled_status(self, correlation_module):
-        rule = {**MOCK_RULE, "enabled": False}
+    def test_inactive_status_maps_to_disabled_status(self, correlation_module):
+        rule = {**MOCK_RULE, "status": "inactive"}
         template = correlation_module._rule_to_template(rule, "aws")
         assert template["status"] == "disabled"
+
+    def test_active_status_maps_to_active_even_when_enabled_is_false(self, correlation_module):
+        # The Falcon API always returns enabled=False, regardless of whether
+        # the rule is actually running — `status` is the field that carries
+        # the real state, and must be what drives the IaC template.
+        rule = {**MOCK_RULE, "enabled": False, "status": "active"}
+        template = correlation_module._rule_to_template(rule, "aws")
+        assert template["status"] == "active"
 
 
 class TestDryRunMode:
