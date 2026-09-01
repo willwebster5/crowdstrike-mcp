@@ -104,7 +104,7 @@ CASES = [
         "CorrelationModule",
         (),
         "_list_rules",
-        lambda: {"success": True, "count": 300, "total": 675, "rules": _records(300)},
+        lambda: {"success": True, "count": 300, "total": 675, "rules": _records(300, rule_id="rule-id-placeholder", status="active")},
         lambda m: m.correlation_list_rules(max_results=500),
     ),
     (

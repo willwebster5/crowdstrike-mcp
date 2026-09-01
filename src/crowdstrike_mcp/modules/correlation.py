@@ -137,9 +137,9 @@ class CorrelationModule(BaseModule):
         ]
 
         for i, rule in enumerate(rules, 1):
-            enabled_str = "ENABLED" if rule.get("enabled") else "DISABLED"
-            lines.append(f"{i}. [{enabled_str}] {rule['name']}")
-            lines.append(f"   ID: {rule['id']}")
+            status_str = (rule.get("status") or "unknown").upper()
+            lines.append(f"{i}. [{status_str}] {rule['name']}")
+            lines.append(f"   Rule ID: {rule['rule_id']}")
             if rule.get("severity"):
                 lines.append(f"   Severity: {rule['severity']}")
             if rule.get("description"):
@@ -160,7 +160,7 @@ class CorrelationModule(BaseModule):
 
     async def correlation_get_rule(
         self,
-        rule_ids: Annotated[list[str], "List of rule IDs to retrieve"],
+        rule_ids: Annotated[list[str], "Rule IDs to retrieve — the `rule_id` values from correlation_list_rules output"],
     ) -> str:
         """Get full details for specific correlation rules."""
         result = self._get_rules(rule_ids)
@@ -172,8 +172,7 @@ class CorrelationModule(BaseModule):
 
         for rule in result.get("rules", []):
             lines.append(f"### {rule.get('name', 'Unknown')}")
-            lines.append(f"- ID: {rule.get('id', 'N/A')}")
-            lines.append(f"- Enabled: {rule.get('enabled', False)}")
+            lines.append(f"- Rule ID: {rule.get('rule_id', 'N/A')}")
             lines.append(f"- Status: {rule.get('status', 'N/A')}")
             lines.append(f"- Severity: {rule.get('severity', 'N/A')}")
             lines.append(f"- Created: {rule.get('created_on', 'N/A')}")
@@ -205,7 +204,7 @@ class CorrelationModule(BaseModule):
 
     async def correlation_update_rule(
         self,
-        rule_id: Annotated[str, "Rule ID to update"],
+        rule_id: Annotated[str, "Rule ID to update — the `rule_id` value from correlation_list_rules output"],
         enabled: Annotated[bool, "True to enable, False to disable"],
         comment: Annotated[Optional[str], "Audit comment explaining the change"] = None,
     ) -> str:
@@ -224,7 +223,7 @@ class CorrelationModule(BaseModule):
 
     async def correlation_export_rule(
         self,
-        rule_id: Annotated[str, "Rule ID to export"],
+        rule_id: Annotated[str, "Rule ID to export — the `rule_id` value from correlation_list_rules output"],
     ) -> str:
         """Export a correlation rule in structured format for review."""
         result = self._export_rule(rule_id)
@@ -311,7 +310,11 @@ class CorrelationModule(BaseModule):
 
             filtered = all_rules
             if enabled is not None:
-                filtered = [r for r in filtered if r.get("enabled", False) is enabled]
+                # The API's `enabled` field is always false regardless of a rule's
+                # real state — `status` ("active"/"inactive") carries the real
+                # signal, so the enabled filter is implemented against it.
+                wanted_status = "active" if enabled else "inactive"
+                filtered = [r for r in filtered if r.get("status") == wanted_status]
             if search:
                 search_lower = search.lower()
                 filtered = [r for r in filtered if search_lower in r.get("name", "").lower() or search_lower in r.get("description", "").lower()]
@@ -323,10 +326,9 @@ class CorrelationModule(BaseModule):
             for rule in filtered:
                 summaries.append(
                     {
-                        "id": rule.get("id", ""),
+                        "rule_id": rule.get("rule_id", ""),
                         "name": rule.get("name", ""),
                         "description": rule.get("description", "")[:200],
-                        "enabled": rule.get("enabled", False),
                         "status": rule.get("status", ""),
                         "severity": rule.get("severity", ""),
                         "created_on": rule.get("created_on", ""),
@@ -352,7 +354,13 @@ class CorrelationModule(BaseModule):
 
             resources = response.get("body", {}).get("resources", [])
             if not resources:
-                return {"success": False, "error": f"No rules found for IDs: {rule_ids}"}
+                return {
+                    "success": False,
+                    "error": (
+                        f"No rules found for IDs: {rule_ids}. This tool expects the `rule_id` value "
+                        "from correlation_list_rules output, not the internal `id` field."
+                    ),
+                }
 
             return {"success": True, "rules": resources, "count": len(resources)}
         except Exception as e:
@@ -389,10 +397,9 @@ class CorrelationModule(BaseModule):
         rule = rules[0]
         export = {
             "metadata": {
-                "rule_id": rule.get("id", ""),
+                "rule_id": rule.get("rule_id", ""),
                 "name": rule.get("name", ""),
                 "description": rule.get("description", ""),
-                "enabled": rule.get("enabled", False),
                 "status": rule.get("status", ""),
                 "severity": rule.get("severity", ""),
                 "created_on": rule.get("created_on", ""),
@@ -414,7 +421,7 @@ class CorrelationModule(BaseModule):
 
     async def correlation_import_to_iac(
         self,
-        rule_id: Annotated[str, "Correlation rule ID to import"],
+        rule_id: Annotated[str, "Correlation rule ID to import — the `rule_id` value from correlation_list_rules output"],
         vendor: Annotated[str, "Vendor directory (aws, microsoft, crowdstrike, google, github, cato, generic, knowbe4)"],
         resource_id_override: Annotated[Optional[str], "Override the auto-generated resource_id"] = None,
         dry_run: Annotated[bool, "If True, return YAML without writing to disk"] = False,
@@ -631,7 +638,10 @@ class CorrelationModule(BaseModule):
             "name": rule.get("name", ""),
             "description": rule.get("description", ""),
             "severity": rule.get("severity", 50),
-            "status": "active" if rule.get("enabled", False) else "disabled",
+            # `enabled` is always false on the Falcon API's rule objects regardless
+            # of real state; `status` ("active"/"inactive") is the field that
+            # reflects whether the rule is actually running.
+            "status": "active" if rule.get("status") == "active" else "disabled",
             "search": {
                 "filter": search.get("filter", ""),
                 "lookback": lookback,
