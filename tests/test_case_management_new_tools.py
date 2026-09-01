@@ -195,9 +195,7 @@ class TestCaseUploadFile:
             "status_code": 201,
             "body": {},
         }
-        result = asyncio.run(
-            case_module.case_upload_file(case_id="case-123", file_path=str(f))
-        )
+        result = asyncio.run(case_module.case_upload_file(case_id="case-123", file_path=str(f)))
         assert "successfully" in result.lower()
         assert "report.md" in result
 
@@ -208,17 +206,11 @@ class TestCaseUploadFile:
             "status_code": 404,
             "body": {"errors": [{"message": "Not Found"}]},
         }
-        result = asyncio.run(
-            case_module.case_upload_file(case_id="case-123", file_path=str(f))
-        )
+        result = asyncio.run(case_module.case_upload_file(case_id="case-123", file_path=str(f)))
         assert result.count("Failed to upload file") == 1
 
     def test_handles_missing_file(self, case_module):
-        result = asyncio.run(
-            case_module.case_upload_file(
-                case_id="case-123", file_path="/no/such/file.md"
-            )
-        )
+        result = asyncio.run(case_module.case_upload_file(case_id="case-123", file_path="/no/such/file.md"))
         assert "not found" in result.lower()
 
 
