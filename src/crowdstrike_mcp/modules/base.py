@@ -215,9 +215,9 @@ class BaseModule(ABC):
         Session-scoped (HTTP) or instance-level (stdio), mirroring ``_get_auth``.
         Intended for cache keys that must not cross tenants: a module-instance
         cache keyed only on request content (e.g. AlertsModule's NGSIEM event
-        cache) is shared across every session in HTTP mode, so without this a
-        cache hit for one tenant's composite_id can return another tenant's
-        data if the IDs collide. Returns None if unresolvable rather than
+        cache, ThreatGraphModule's edge-type cache) is shared across every
+        session in HTTP mode, so without this a cache hit for one tenant can
+        return another tenant's data. Returns None if unresolvable rather than
         raising — a cache helper should degrade to "always miss", not crash a
         tool call that would otherwise succeed.
         """

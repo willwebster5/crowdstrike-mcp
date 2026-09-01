@@ -60,7 +60,7 @@ class ThreatGraphModule(BaseModule):
 
     def register_resources(self, server: FastMCP) -> None:
         def _edge_types_body():
-            return self._edge_type_cache.read()
+            return self._edge_type_cache.read(self._get_client_id())
 
         server.resource(
             EDGE_TYPES_RESOURCE_URI,
@@ -143,8 +143,9 @@ class ThreatGraphModule(BaseModule):
                 )
                 return format_text_response(f"Failed to get edge types: {err}", raw=True)
             # Invalidate then re-read so the cache picks up the fresh response
-            self._edge_type_cache.invalidate()
-            body = self._edge_type_cache.read()
+            client_id = self._get_client_id()
+            self._edge_type_cache.invalidate(client_id)
+            body = self._edge_type_cache.read(client_id)
             return format_text_response(
                 body,
                 tool_name="threatgraph_get_edge_types",
