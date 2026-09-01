@@ -447,7 +447,7 @@ class CaseManagementModule(BaseModule):
 
         if not result.get("success"):
             return format_text_response(
-                f"Failed to upload file: {result.get('error')}",
+                result.get("error"),
                 raw=True,
             )
 
@@ -592,7 +592,7 @@ class CaseManagementModule(BaseModule):
                 }
             ]
             falcon = self._service(CaseManagement)
-            response = falcon.aggregate_access_tags(body=body)
+            response = falcon.get_access_tag_aggregations(body=body)
 
             if response["status_code"] != 200:
                 err = format_api_error(response, "Failed to aggregate access tags", operation="aggregates_access_tags_post_v1")
@@ -665,7 +665,7 @@ class CaseManagementModule(BaseModule):
         """Retrieve recent RTR file collection activity for a case."""
         try:
             falcon = self._service(CaseManagement)
-            response = falcon.get_rtr_recent_files(body={"case_id": case_id})
+            response = falcon.retrieve_rtr_recent_file(body={"case_id": case_id})
 
             if response["status_code"] != 200:
                 err = format_api_error(response, "Failed to get RTR recent files", operation="entities_retrieve_rtr_recent_file_post_v1")

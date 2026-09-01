@@ -21,7 +21,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "crowdstrike-falconpy>=1.6.1",
+    # >=1.6.2, not >=1.6.1: CaseManagement.upload_file() on 1.6.1 sends
+    # case_id/description as URL query-string params instead of multipart
+    # form-data fields, so the case-files upload endpoint 404s on every call
+    # (it only reads those fields from the form body). Fixed upstream in
+    # 1.6.2 — see tests/test_case_management_upload_wire_format.py.
+    "crowdstrike-falconpy>=1.6.2",
     # Upper bound is deliberate. mcp 2.0.0 (2026-07-28) removed
     # mcp.server.fastmcp, which server.py and every module import — CI went from
     # green to "ModuleNotFoundError: No module named 'mcp.server.fastmcp'" at
