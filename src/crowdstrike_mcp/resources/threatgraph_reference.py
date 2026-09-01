@@ -9,6 +9,7 @@ threatgraph_get_edge_types tool.
 
 from __future__ import annotations
 
+import threading
 from typing import Callable
 
 FETCH_FAILURE_BODY = (
@@ -20,7 +21,7 @@ FETCH_FAILURE_BODY = (
 
 
 class ThreatGraphEdgeTypeCache:
-    """Lazy, process-lifetime cache for Threat Graph edge types."""
+    """Lazy, process-lifetime cache for Threat Graph edge types, scoped per tenant."""
 
     def __init__(self, fetcher: Callable[[], dict]):
         """
@@ -29,12 +30,23 @@ class ThreatGraphEdgeTypeCache:
                      from get_edge_types() (keys: status_code, body).
         """
         self._fetcher = fetcher
-        self._cached: str | None = None
+        # Keyed by client_id, not a single scalar: ThreatGraphModule is
+        # instantiated once at server startup and shared across every session
+        # in HTTP mode. Without this, the first tenant to read the edge-type
+        # resource permanently seeds the cache for every subsequent tenant —
+        # e.g. a tenant with a different edge-type entitlement would silently
+        # receive another tenant's cached list. Guarded by a lock since
+        # concurrent tool calls now genuinely run in parallel (see
+        # modules/base.py::_offloaded).
+        self._cached: dict[str | None, str] = {}
+        self._lock = threading.Lock()
 
-    def read(self) -> str:
+    def read(self, client_id: str | None = None) -> str:
         """Return the formatted edge-type reference, fetching if needed."""
-        if self._cached is not None:
-            return self._cached
+        with self._lock:
+            cached = self._cached.get(client_id)
+        if cached is not None:
+            return cached
         response = self._fetcher()
         status = response.get("status_code")
         if status != 200:
@@ -42,12 +54,15 @@ class ThreatGraphEdgeTypeCache:
             detail = errors[0].get("message") if errors else f"HTTP {status}"
             return FETCH_FAILURE_BODY.format(detail=detail)
         resources = (response.get("body") or {}).get("resources") or []
-        self._cached = self._format(resources)
-        return self._cached
+        formatted = self._format(resources)
+        with self._lock:
+            self._cached[client_id] = formatted
+        return formatted
 
-    def invalidate(self) -> None:
-        """Drop the cached response so the next read re-fetches."""
-        self._cached = None
+    def invalidate(self, client_id: str | None = None) -> None:
+        """Drop the cached response for one tenant so its next read re-fetches."""
+        with self._lock:
+            self._cached.pop(client_id, None)
 
     @staticmethod
     def _format(resources: list) -> str:

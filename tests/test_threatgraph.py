@@ -107,6 +107,72 @@ class TestEdgeTypeCache:
         assert state["calls"] == 2
 
 
+class TestEdgeTypeCacheClientScoping:
+    """The edge-type cache must not leak across tenants sharing one ThreatGraphModule.
+
+    ThreatGraphModule is instantiated once at server startup and shared across
+    every session in HTTP mode. Without scoping the cache by client_id, the
+    first tenant to read the edge-type resource permanently seeds the cache
+    for every subsequent tenant on that process.
+    """
+
+    def test_cache_not_shared_across_client_ids(self):
+        from crowdstrike_mcp.resources.threatgraph_reference import ThreatGraphEdgeTypeCache
+
+        fetch_calls = []
+
+        def fake_fetcher():
+            fetch_calls.append(1)
+            return {"status_code": 200, "body": {"resources": ["edge_from_fetch"]}}
+
+        cache = ThreatGraphEdgeTypeCache(fake_fetcher)
+        cache.read(client_id="tenant-a")
+        cache.read(client_id="tenant-b")
+        assert len(fetch_calls) == 2, "tenant B must not get tenant A's cached edge types"
+
+    def test_cache_key_scoped_by_client_id(self):
+        """One ThreatGraphModule instance, credentials swapped mid-session (as in
+        HTTP mode), must not return tenant A's cached edge types to tenant B.
+
+        Mirrors AlertsModule's test_cache_key_scoped_by_client_id
+        (tests/test_ngsiem_timeout_fix.py), which proved the same fix for
+        _ngsiem_event_cache.
+        """
+        with patch("crowdstrike_mcp.modules.threat_graph.ThreatGraph"):
+            tenant_a = MagicMock()
+            tenant_a.client_id = "tenant-a"
+            tenant_a.auth_object = MagicMock()
+            tenant_b = MagicMock()
+            tenant_b.client_id = "tenant-b"
+            tenant_b.auth_object = MagicMock()
+
+            from crowdstrike_mcp.modules.threat_graph import ThreatGraphModule
+
+            module = ThreatGraphModule(tenant_a)
+
+            service_a = MagicMock()
+            service_a.get_edge_types.return_value = {
+                "status_code": 200,
+                "body": {"resources": ["tenant_a_only_edge"]},
+            }
+            module._service = lambda cls: service_a
+            first = module._edge_type_cache.read(module._get_client_id())
+            assert "tenant_a_only_edge" in first
+
+            # Swap the module's active credentials to tenant B without a cache hit.
+            module.client = tenant_b
+            service_b = MagicMock()
+            service_b.get_edge_types.return_value = {
+                "status_code": 200,
+                "body": {"resources": ["tenant_b_only_edge"]},
+            }
+            module._service = lambda cls: service_b
+            second = module._edge_type_cache.read(module._get_client_id())
+            assert service_b.get_edge_types.called, "tenant B must not get tenant A's cached edge types"
+            assert "tenant_b_only_edge" in second
+            assert "tenant_a_only_edge" not in second
+
+
 @pytest.fixture
 def threatgraph_module(mock_client):
     """ThreatGraphModule with ThreatGraph service mocked."""
@@ -158,7 +224,7 @@ class TestThreatGraphGetEdgeTypes:
             "status_code": 200,
             "body": {"resources": ["old"]},
         }
-        first_body = threatgraph_module._edge_type_cache.read()
+        first_body = threatgraph_module._edge_type_cache.read(threatgraph_module._get_client_id())
         assert "old" in first_body
 
         # Change API response, then call the tool
@@ -169,7 +235,7 @@ class TestThreatGraphGetEdgeTypes:
         asyncio.run(threatgraph_module.threatgraph_get_edge_types())
 
         # The cache should now reflect the new list on next resource read
-        second_body = threatgraph_module._edge_type_cache.read()
+        second_body = threatgraph_module._edge_type_cache.read(threatgraph_module._get_client_id())
         assert "new" in second_body
         assert "old" not in second_body
 
