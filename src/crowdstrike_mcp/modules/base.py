@@ -194,7 +194,18 @@ class BaseModule(ABC):
         if tier == "write" and not self.allow_writes:
             self._log(f"Skipping write tool '{name}' (allow_writes=False)")
             return
-        kwargs = {"name": name, "annotations": self._annotations(name, tier, destructive, idempotent)}
+        kwargs = {
+            "name": name,
+            "annotations": self._annotations(name, tier, destructive, idempotent),
+            # FastMCP otherwise auto-derives an outputSchema from the return-type
+            # annotation of every tool. No caller in this codebase reads
+            # structuredContent back out of a tool response, so the schema is
+            # pure overhead — and MCP clients with a limited tools/list context
+            # budget (VS Code Copilot, notably) silently drop tools once that
+            # budget fills. See CrowdStrike falcon-mcp PR #376 for the report
+            # this mirrors: https://github.com/CrowdStrike/falcon-mcp/pull/376
+            "structured_output": False,
+        }
         if description:
             kwargs["description"] = description
         server.tool(**kwargs)(_offloaded(method))
