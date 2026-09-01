@@ -118,6 +118,7 @@ class TestRuleToYamlConversion:
         template = correlation_module._rule_to_template(rule, "aws")
         assert template["status"] == "active"
 
+
 class TestDryRunMode:
     """Test dry_run returns YAML string without writing."""
 
