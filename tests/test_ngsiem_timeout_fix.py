@@ -98,8 +98,35 @@ class TestNgsiemEventCache:
         with patch("crowdstrike_mcp.modules.alerts.Alerts"), patch("crowdstrike_mcp.modules.alerts._NGSIEM_AVAILABLE", True):
             m1 = AlertsModule(mock_client)
             m2 = AlertsModule(mock_client)
-            m1._ngsiem_event_cache[("key", "1d")] = {"success": True}
-            assert ("key", "1d") not in m2._ngsiem_event_cache
+            key = (m1._get_client_id(), "key", "1d")
+            m1._ngsiem_event_cache[key] = {"success": True}
+            assert key not in m2._ngsiem_event_cache
+
+    def test_cache_key_scoped_by_client_id(self, mock_client):
+        """Two AlertsModule instances backed by different credentials must not share a cache entry.
+
+        The cache is keyed by (client_id, composite_id, time_range), not just
+        (composite_id, time_range): in HTTP mode this module instance is shared
+        across every session, so without client_id scoping a composite_id
+        collision between two tenants could return one tenant's NGSIEM events
+        to another tenant's alert_analysis call.
+        """
+        with patch("crowdstrike_mcp.modules.alerts.Alerts"), patch("crowdstrike_mcp.modules.alerts._NGSIEM_AVAILABLE", True):
+            tenant_a = MagicMock()
+            tenant_a.client_id = "tenant-a"
+            tenant_b = MagicMock()
+            tenant_b.client_id = "tenant-b"
+            module = AlertsModule(tenant_a)
+
+            cached_for_a = {"success": True, "events": [{"tenant": "a"}]}
+            module._ngsiem_event_cache[(module._get_client_id(), "cust:ngsiem:cust:same-id", "1d")] = cached_for_a
+
+            # Swap the module's active credentials to tenant B without a cache hit.
+            module.client = tenant_b
+            execute_called = []
+            module._execute_ngsiem_query = lambda *a, **kw: execute_called.append(1) or {"success": False, "events_matched": 0}
+            module._get_related_ngsiem_events("cust:ngsiem:cust:same-id", time_range="1d", max_events=5)
+            assert len(execute_called) > 0, "tenant B must not get tenant A's cached result for a colliding composite_id"
 
 
 class TestParallelIndicatorQueries:
@@ -128,7 +155,7 @@ class TestParallelIndicatorQueries:
     def test_cache_hit_skips_queries(self, alerts_module):
         """Second call with same (detection_id, time_range) returns cached result."""
         cached = {"success": True, "events": [{"field": "value"}], "events_matched": 1, "query_used": "q"}
-        cache_key = ("cust:ngsiem:cust:indicator-uuid", "1d")
+        cache_key = (alerts_module._get_client_id(), "cust:ngsiem:cust:indicator-uuid", "1d")
         alerts_module._ngsiem_event_cache[cache_key] = cached
 
         execute_called = []
@@ -156,7 +183,7 @@ class TestParallelIndicatorQueries:
 
         result = alerts_module._get_related_ngsiem_events("cust:ngsiem:cust:indicator-uuid", time_range="1d", max_events=5)
         assert result.get("success") is True
-        cache_key = ("cust:ngsiem:cust:indicator-uuid", "1d")
+        cache_key = (alerts_module._get_client_id(), "cust:ngsiem:cust:indicator-uuid", "1d")
         assert cache_key in alerts_module._ngsiem_event_cache
 
     def test_failed_result_not_cached(self, alerts_module):
@@ -164,7 +191,7 @@ class TestParallelIndicatorQueries:
         alerts_module._execute_ngsiem_query = lambda *a, **kw: {"success": False, "events_matched": 0}
 
         alerts_module._get_related_ngsiem_events("cust:ngsiem:cust:no-match", time_range="1d", max_events=5)
-        cache_key = ("cust:ngsiem:cust:no-match", "1d")
+        cache_key = (alerts_module._get_client_id(), "cust:ngsiem:cust:no-match", "1d")
         assert cache_key not in alerts_module._ngsiem_event_cache
 
     def test_futures_timeout_returns_failure_not_exception(self, alerts_module):

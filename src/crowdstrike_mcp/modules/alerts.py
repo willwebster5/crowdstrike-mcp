@@ -14,10 +14,10 @@ They all share the same OAuth2 token.
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import json
 import re
+import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -71,7 +71,16 @@ class AlertsModule(BaseModule):
 
     def __init__(self, client):
         super().__init__(client)
-        self._ngsiem_event_cache: dict[tuple[str, str], dict] = {}
+        # Keyed by (client_id, composite_id, time_range), not just
+        # (composite_id, time_range): this module instance is shared across
+        # every session in HTTP mode, and composite IDs are not guaranteed
+        # unique across tenants. Without the client_id, a cache hit for one
+        # tenant's alert could return another tenant's NGSIEM events. Guarded
+        # by _ngsiem_event_cache_lock since concurrent alert_analysis calls now
+        # genuinely run in parallel (see modules/base.py::_offloaded) rather
+        # than being serialized by a blocked event loop.
+        self._ngsiem_event_cache: dict[tuple[str | None, str, str], dict] = {}
+        self._ngsiem_event_cache_lock = threading.Lock()
         self._log("Initialized")
 
     def register_resources(self, server: FastMCP) -> None:
@@ -219,7 +228,11 @@ class AlertsModule(BaseModule):
     ) -> str:
         """Analyze an alert with type-specific enrichment."""
         detection_id = extract_detection_id(detection_id)
-        result = await asyncio.to_thread(self._analyze_alert, detection_id, max_events)
+        # No longer offloaded here: BaseModule._add_tool now offloads every
+        # registered tool centrally (see modules/base.py::_offloaded), so this
+        # method's whole body already runs off the event loop. A second,
+        # tool-local asyncio.to_thread would just double the thread hops.
+        result = self._analyze_alert(detection_id, max_events)
 
         if not result.get("success"):
             return format_text_response(
@@ -579,9 +592,10 @@ class AlertsModule(BaseModule):
             return {"success": False, "error": "NGSIEM enrichment not available"}
 
         # Cache check — avoid re-querying the same alert in a session
-        cache_key = (composite_id, time_range)
-        if cache_key in self._ngsiem_event_cache:
-            return self._ngsiem_event_cache[cache_key]
+        cache_key = (self._get_client_id(), composite_id, time_range)
+        with self._ngsiem_event_cache_lock:
+            if cache_key in self._ngsiem_event_cache:
+                return self._ngsiem_event_cache[cache_key]
 
         try:
             parts = composite_id.split(":")
@@ -637,7 +651,8 @@ class AlertsModule(BaseModule):
                         "detection_id_used": detection_id_from_event,
                         "query_used": query,
                     }
-                    self._ngsiem_event_cache[cache_key] = success_result
+                    with self._ngsiem_event_cache_lock:
+                        self._ngsiem_event_cache[cache_key] = success_result
                     return success_result
 
             if indicator_event:
@@ -648,7 +663,8 @@ class AlertsModule(BaseModule):
                     "detection_id_used": detection_id_from_event,
                     "note": "Only found the indicator event, no additional related events",
                 }
-                self._ngsiem_event_cache[cache_key] = success_result
+                with self._ngsiem_event_cache_lock:
+                    self._ngsiem_event_cache[cache_key] = success_result
                 return success_result
 
             return {

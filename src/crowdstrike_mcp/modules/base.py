@@ -13,11 +13,15 @@ import asyncio
 import functools
 import inspect
 import sys
+import weakref
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Callable
 
 from mcp.types import ToolAnnotations
+
+from crowdstrike_mcp.utils import resolve_env_number
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -30,6 +34,42 @@ _VALID_TIERS = {"read", "write"}
 # Each asyncio task gets its own context copy, so concurrent requests are isolated.
 # Canonical location — common/session_auth.py imports this.
 _session_client: ContextVar["FalconClient | None"] = ContextVar("_session_client", default=None)
+
+# asyncio.to_thread submits offloaded tool calls to the running loop's default
+# executor, which Python creates lazily as ThreadPoolExecutor(max_workers=
+# min(32, os.cpu_count()+4)) — as few as ~9 threads in a constrained container.
+# NGSIEM searches (and other long-running tools) hold their worker for their
+# entire runtime, so a burst of concurrent long-running calls at the scale the
+# field report reproduced this bug with (~137 concurrent subagents) can
+# exhaust that default pool and queue new calls behind it with no visible
+# signal distinguishing "queued" from "the Falcon API is just slow" — a
+# smaller-scale reprise of the exact wedge this offload exists to prevent.
+DEFAULT_TOOL_THREADS = 64
+
+# Loops we've already sized, not a bare process-global flag: a flag would
+# incorrectly no-op for a second, independent event loop in the same process
+# (e.g. an embedder or test harness that calls into the tool-offload path
+# across more than one loop), silently leaving that loop with asyncio's small
+# stdlib default and no signal that happened. Weak so a closed loop's entry
+# doesn't outlive it. No lock: this is only ever called from a coroutine
+# running on the one event-loop thread that owns the loop being sized —
+# never from a raw OS thread — so there is no concurrent caller to race.
+_sized_loops: "weakref.WeakSet[asyncio.AbstractEventLoop]" = weakref.WeakSet()
+
+
+def _ensure_tool_executor() -> None:
+    """Give the running event loop a generously-sized default executor.
+
+    ``loop.set_default_executor`` needs a running event loop, which doesn't
+    exist yet at module import / server construction time, so this runs
+    lazily from inside the first offloaded tool call on that loop instead.
+    """
+    loop = asyncio.get_running_loop()
+    if loop in _sized_loops:
+        return
+    max_workers = int(resolve_env_number("FALCON_MCP_TOOL_THREADS", DEFAULT_TOOL_THREADS, min_value=1, log_prefix="[BaseModule] "))
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="falcon-tool"))
+    _sized_loops.add(loop)
 
 
 def _offloaded(method: Callable) -> Callable:
@@ -58,11 +98,27 @@ def _offloaded(method: Callable) -> Callable:
     ``asyncio.to_thread`` copies the current context into the worker, so the
     ``_session_client`` ContextVar that HTTP mode sets per request still resolves
     correctly inside the thread.
+
+    Known limitation — cancellation is best-effort, not real: a client
+    ``notifications/cancelled`` now reaches this Task and unblocks the caller
+    immediately (impossible before this wrapper existed, since the loop itself
+    was the thing blocked), but ``concurrent.futures.Future.cancel()`` is a
+    no-op once its work item has started running — Python cannot forcibly stop
+    a running thread. The underlying falconpy call keeps executing in the
+    background until it finishes or its own timeout fires
+    (``FALCON_MCP_HTTP_TIMEOUT`` / ``FALCON_MCP_NGSIEM_TIMEOUT``); its result is
+    then discarded. This also means there is currently no path for a tool to
+    report MCP progress mid-call: the body runs inside a throwaway event loop
+    on a worker thread, disconnected from the session/transport loop a
+    ``Context`` would report through. Both are accepted tradeoffs of offloading
+    to a thread rather than rewriting falconpy's call path onto an async HTTP
+    client — fixing them for real needs that rewrite, not a deeper wrapper here.
     """
     if inspect.iscoroutinefunction(method):
 
         @functools.wraps(method)
         async def wrapper(*args, **kwargs):
+            _ensure_tool_executor()
             # The coroutine is created here but driven to completion by a fresh
             # loop inside the worker thread, leaving the server's own loop free.
             return await asyncio.to_thread(asyncio.run, method(*args, **kwargs))
@@ -71,6 +127,7 @@ def _offloaded(method: Callable) -> Callable:
 
         @functools.wraps(method)
         async def wrapper(*args, **kwargs):
+            _ensure_tool_executor()
             return await asyncio.to_thread(functools.partial(method, *args, **kwargs))
 
     wrapper.__signature__ = _resolved_signature(method)
@@ -151,6 +208,22 @@ class BaseModule(ABC):
                 "FALCON_CLIENT_ID and FALCON_CLIENT_SECRET in your client's connection settings."
             )
         return self.client.auth_object
+
+    def _get_client_id(self) -> str | None:
+        """Identify the credential set behind the current call.
+
+        Session-scoped (HTTP) or instance-level (stdio), mirroring ``_get_auth``.
+        Intended for cache keys that must not cross tenants: a module-instance
+        cache keyed only on request content (e.g. AlertsModule's NGSIEM event
+        cache) is shared across every session in HTTP mode, so without this a
+        cache hit for one tenant's composite_id can return another tenant's
+        data if the IDs collide. Returns None if unresolvable rather than
+        raising — a cache helper should degrade to "always miss", not crash a
+        tool call that would otherwise succeed.
+        """
+        session = _session_client.get()
+        client = session if session is not None else self.client
+        return getattr(client, "client_id", None)
 
     def _service(self, cls):
         """Create a FalconPy service class bound to the current auth context.
