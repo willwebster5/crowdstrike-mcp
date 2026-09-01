@@ -347,7 +347,7 @@ class CorrelationModule(BaseModule):
             if self._use_harness:
                 response = falcon.command("entities_rules_patch_v1", body=update_payload)
             else:
-                response = falcon.update_rules(body=update_payload)
+                response = falcon.update_rule(body=update_payload)
 
             if response["status_code"] != 200:
                 return {"success": False, "error": format_api_error(response, "Failed to update rule", operation="update_rules")}
