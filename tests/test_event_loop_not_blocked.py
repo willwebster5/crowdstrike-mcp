@@ -51,7 +51,7 @@ def _blocking_ngsiem_tools(client, block_seconds: float):
 
     server = FastMCP("test")
     registered: dict = {}
-    server.tool = lambda **kw: (lambda fn: registered.setdefault(kw["name"], fn) or fn)
+    server.tool = lambda **kw: lambda fn: registered.setdefault(kw["name"], fn) or fn
     module.register_tools(server)
     return registered
 
@@ -87,10 +87,7 @@ class TestEventLoopStaysResponsive:
             return during
 
         ticks_during_query = asyncio.run(scenario())
-        assert ticks_during_query > 5, (
-            f"event loop was blocked for the whole query: only {ticks_during_query} "
-            "heartbeat ticks fired while it ran"
-        )
+        assert ticks_during_query > 5, f"event loop was blocked for the whole query: only {ticks_during_query} heartbeat ticks fired while it ran"
 
     def test_an_unrelated_tool_is_served_while_a_query_is_stalled(self, mock_client):
         """A stalled search must not hold up a different, trivial tool.
@@ -237,7 +234,7 @@ class TestToolRegistrationOffloads:
         module = NGSIEMModule(mock_client)
         server = FastMCP("test")
         registered = {}
-        server.tool = lambda **kw: (lambda fn: registered.setdefault(kw["name"], fn) or fn)
+        server.tool = lambda **kw: lambda fn: registered.setdefault(kw["name"], fn) or fn
 
         async def probe(repository: str, limit: int = 10) -> dict:
             """Docstring must survive too."""

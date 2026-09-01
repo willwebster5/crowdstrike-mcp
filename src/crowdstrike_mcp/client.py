@@ -57,15 +57,13 @@ def _resolve_http_timeout() -> float:
         value = float(raw)
     except ValueError:
         print(
-            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (not a number); "
-            f"using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
+            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (not a number); using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
             file=sys.stderr,
         )
         return DEFAULT_HTTP_TIMEOUT_SECONDS
     if value <= 0:
         print(
-            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (must be > 0); "
-            f"using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
+            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (must be > 0); using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
             file=sys.stderr,
         )
         return DEFAULT_HTTP_TIMEOUT_SECONDS
