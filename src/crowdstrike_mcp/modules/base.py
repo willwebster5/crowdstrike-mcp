@@ -13,7 +13,7 @@ import asyncio
 import functools
 import inspect
 import sys
-import threading
+import weakref
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
@@ -45,27 +45,31 @@ _session_client: ContextVar["FalconClient | None"] = ContextVar("_session_client
 # signal distinguishing "queued" from "the Falcon API is just slow" — a
 # smaller-scale reprise of the exact wedge this offload exists to prevent.
 DEFAULT_TOOL_THREADS = 64
-_executor_lock = threading.Lock()
-_executor_installed = False
+
+# Loops we've already sized, not a bare process-global flag: a flag would
+# incorrectly no-op for a second, independent event loop in the same process
+# (e.g. an embedder or test harness that calls into the tool-offload path
+# across more than one loop), silently leaving that loop with asyncio's small
+# stdlib default and no signal that happened. Weak so a closed loop's entry
+# doesn't outlive it. No lock: this is only ever called from a coroutine
+# running on the one event-loop thread that owns the loop being sized —
+# never from a raw OS thread — so there is no concurrent caller to race.
+_sized_loops: "weakref.WeakSet[asyncio.AbstractEventLoop]" = weakref.WeakSet()
 
 
 def _ensure_tool_executor() -> None:
-    """Install a generously-sized default executor, once, on first use.
+    """Give the running event loop a generously-sized default executor.
 
     ``loop.set_default_executor`` needs a running event loop, which doesn't
     exist yet at module import / server construction time, so this runs
-    lazily from inside the first offloaded tool call instead.
+    lazily from inside the first offloaded tool call on that loop instead.
     """
-    global _executor_installed
-    if _executor_installed:
+    loop = asyncio.get_running_loop()
+    if loop in _sized_loops:
         return
-    with _executor_lock:
-        if _executor_installed:
-            return
-        max_workers = int(resolve_env_number("FALCON_MCP_TOOL_THREADS", DEFAULT_TOOL_THREADS, min_value=1, log_prefix="[BaseModule] "))
-        loop = asyncio.get_running_loop()
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="falcon-tool"))
-        _executor_installed = True
+    max_workers = int(resolve_env_number("FALCON_MCP_TOOL_THREADS", DEFAULT_TOOL_THREADS, min_value=1, log_prefix="[BaseModule] "))
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="falcon-tool"))
+    _sized_loops.add(loop)
 
 
 def _offloaded(method: Callable) -> Callable:

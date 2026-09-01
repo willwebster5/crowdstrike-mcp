@@ -19,11 +19,11 @@ import crowdstrike_mcp.modules.base as base_module
 
 
 @pytest.fixture(autouse=True)
-def _reset_executor_install_flag(monkeypatch):
-    """The install-once flag is a module global; reset it so tests don't leak state."""
-    monkeypatch.setattr(base_module, "_executor_installed", False)
+def _reset_sized_loops():
+    """_sized_loops is a module-global WeakSet; clear it so tests don't leak state."""
+    base_module._sized_loops.clear()
     yield
-    monkeypatch.setattr(base_module, "_executor_installed", False)
+    base_module._sized_loops.clear()
 
 
 def test_default_executor_is_resized_above_the_stdlib_default(monkeypatch):
@@ -52,8 +52,8 @@ def test_pool_size_is_operator_tunable(monkeypatch):
     assert executor._max_workers == 128
 
 
-def test_installed_only_once_per_process(monkeypatch):
-    """A second call must not replace an already-installed executor."""
+def test_installed_only_once_per_loop(monkeypatch):
+    """A second call on the SAME loop must not replace an already-installed executor."""
     monkeypatch.delenv("FALCON_MCP_TOOL_THREADS", raising=False)
 
     async def scenario():
@@ -65,3 +65,29 @@ def test_installed_only_once_per_process(monkeypatch):
 
     first, second = asyncio.run(scenario())
     assert first is second
+
+
+def test_a_second_independent_event_loop_also_gets_sized(monkeypatch):
+    """Each event loop must get its own sized executor, not just the first one.
+
+    A bare process-global "installed" flag (the original implementation) would
+    incorrectly no-op for a second, independent event loop in the same
+    process — e.g. an embedder or test harness calling into the tool-offload
+    path across more than one loop — silently leaving that loop with
+    asyncio's small stdlib default and no signal that happened.
+    """
+    monkeypatch.delenv("FALCON_MCP_TOOL_THREADS", raising=False)
+
+    async def scenario():
+        base_module._ensure_tool_executor()
+        return asyncio.get_running_loop()._default_executor
+
+    first_loop_executor = asyncio.run(scenario())
+    second_loop_executor = asyncio.run(scenario())
+
+    assert first_loop_executor is not None
+    assert second_loop_executor is not None
+    assert second_loop_executor is not first_loop_executor, "the second loop reused the first loop's (closed) executor object"
+    assert second_loop_executor._max_workers == base_module.DEFAULT_TOOL_THREADS, (
+        "the second loop fell through to asyncio's stdlib default instead of being sized"
+    )

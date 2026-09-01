@@ -81,16 +81,33 @@ class _ThreadSafeOAuth2(OAuth2):
     a plain Lock — ``auth_headers`` calls ``self.login()`` internally when the
     token is stale, and both resolve through this subclass on the same
     thread, so a non-reentrant lock would deadlock on that call itself).
+
+    ``_refresh_lock`` is set before calling ``super().__init__()``, not after:
+    the currently-pinned falconpy release never touches ``login()``/
+    ``auth_headers`` during construction, but falconpy is pinned with no
+    upper bound and other code paths (``child_login``) already call
+    ``login()`` conditionally — if a future release ever logs in eagerly from
+    ``__init__``, that call would resolve to this subclass's override and
+    need the lock to already exist.
+
+    ``auth_headers`` checks staleness unlocked before deciding whether to
+    acquire the lock at all — the same double-checked-locking shape
+    ``FalconClient.auth_object`` below uses for its lazy init. ``auth_headers``
+    is read on every falconpy HTTP request, so locking unconditionally would
+    serialize the overwhelmingly common non-stale case behind a single global
+    lock across every concurrent tool call, not just the rare refresh.
     """
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self._refresh_lock = threading.RLock()
+        super().__init__(*args, **kwargs)
 
     @property
     def auth_headers(self):
-        with self._refresh_lock:
-            return super().auth_headers
+        if self.token_stale and self.refreshable:
+            with self._refresh_lock:
+                return super().auth_headers
+        return super().auth_headers
 
     def login(self):
         with self._refresh_lock:
