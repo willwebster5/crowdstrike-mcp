@@ -22,7 +22,6 @@ is intentionally excluded (credential).
 
 from __future__ import annotations
 
-import os
 import re
 import time
 from datetime import datetime, timezone
@@ -32,7 +31,7 @@ import requests
 from falconpy import NGSIEM
 
 from crowdstrike_mcp.modules.base import BaseModule
-from crowdstrike_mcp.utils import format_text_response
+from crowdstrike_mcp.utils import format_text_response, resolve_env_number
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -323,10 +322,7 @@ class NGSIEMModule(BaseModule):
         Clamped to [1, MAX_INLINE_ROWS]. Invalid env values fall back to the default.
         """
         if display_rows is None:
-            try:
-                display_rows = int(os.environ.get("FALCON_MCP_NGSIEM_DISPLAY_ROWS", str(DEFAULT_INLINE_ROWS)))
-            except (ValueError, TypeError):
-                display_rows = DEFAULT_INLINE_ROWS
+            display_rows = int(resolve_env_number("FALCON_MCP_NGSIEM_DISPLAY_ROWS", DEFAULT_INLINE_ROWS, log_prefix="[NGSIEMModule] "))
         return min(max(display_rows, 1), MAX_INLINE_ROWS)
 
     def _raw_start_search_error(self, repo: str, query: str, search_kwargs: dict) -> str | None:
@@ -519,11 +515,19 @@ class NGSIEMModule(BaseModule):
             return {"success": False, "error": f"Search start error: {str(e)}"}
 
         # Wait for completion. Poll/timeout are env-tunable so long hunts
-        # aren't cut short by the default ceiling.
+        # aren't cut short by the default ceiling. resolve_env_number degrades
+        # a malformed value to the default rather than raising — this used to
+        # be a bare int(os.environ.get(...)) inside the try below, so a typo'd
+        # env var aborted the whole search with a confusing "Query execution
+        # error" instead of just using the default like every other env-tuned
+        # knob in this file. No min_value floor: FALCON_MCP_NGSIEM_TIMEOUT=0 is
+        # a deliberately supported "fail fast" setting (the while loop below
+        # never executes and returns a timeout result immediately), not an
+        # error to reject.
+        timeout = int(resolve_env_number("FALCON_MCP_NGSIEM_TIMEOUT", DEFAULT_TIMEOUT_SECONDS, log_prefix="[NGSIEMModule] "))
+        poll_interval = int(resolve_env_number("FALCON_MCP_NGSIEM_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_SECONDS, log_prefix="[NGSIEMModule] "))
         try:
             start = time.time()
-            timeout = int(os.environ.get("FALCON_MCP_NGSIEM_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS)))
-            poll_interval = int(os.environ.get("FALCON_MCP_NGSIEM_POLL_INTERVAL", str(DEFAULT_POLL_INTERVAL_SECONDS)))
 
             while time.time() - start < timeout:
                 status_response = falcon.get_search_status(

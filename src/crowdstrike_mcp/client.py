@@ -14,6 +14,7 @@ import json
 import os
 import platform
 import sys
+import threading
 from typing import Optional
 
 from falconpy import OAuth2
@@ -26,6 +27,7 @@ except Exception:
     _FALCONPY_VERSION = "unknown"
 
 from crowdstrike_mcp import __version__ as SERVER_VERSION
+from crowdstrike_mcp.utils import resolve_env_number
 
 USER_AGENT = f"crowdstrike-custom-mcp/{SERVER_VERSION} (falconpy/{_FALCONPY_VERSION}; Python/{platform.python_version()})"
 
@@ -45,29 +47,54 @@ DEFAULT_HTTP_TIMEOUT_SECONDS = 60
 def _resolve_http_timeout() -> float:
     """Resolve the per-request timeout from the environment.
 
-    Anything unusable — unset, unparseable, zero or negative — falls back to the
-    default. Zero and negative are rejected rather than passed through because
-    falconpy reads a falsy timeout as "no timeout", which would reinstate the
-    original hang through configuration alone.
+    Anything unusable — unset, unparseable, non-finite (NaN/Inf), zero or
+    negative — falls back to the default. Zero, negative and non-finite are
+    all rejected rather than passed through because falconpy reads a falsy or
+    infinite timeout as "no timeout", which would reinstate the original hang
+    through configuration alone.
     """
-    raw = os.environ.get("FALCON_MCP_HTTP_TIMEOUT", "").strip()
-    if not raw:
-        return DEFAULT_HTTP_TIMEOUT_SECONDS
-    try:
-        value = float(raw)
-    except ValueError:
-        print(
-            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (not a number); using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
-            file=sys.stderr,
-        )
-        return DEFAULT_HTTP_TIMEOUT_SECONDS
-    if value <= 0:
-        print(
-            f"[FalconClient] Ignoring FALCON_MCP_HTTP_TIMEOUT={raw!r} (must be > 0); using {DEFAULT_HTTP_TIMEOUT_SECONDS}s",
-            file=sys.stderr,
-        )
-        return DEFAULT_HTTP_TIMEOUT_SECONDS
-    return value
+    return resolve_env_number(
+        "FALCON_MCP_HTTP_TIMEOUT",
+        DEFAULT_HTTP_TIMEOUT_SECONDS,
+        min_value=0,
+        exclusive_min=True,
+        log_prefix="[FalconClient] ",
+    )
+
+
+class _ThreadSafeOAuth2(OAuth2):
+    """OAuth2 shared across concurrent tool-call worker threads.
+
+    falconpy's OAuth2 has no internal locking: ``auth_headers`` does an
+    unlocked check-then-act on token staleness before calling ``login()``, and
+    ``login()`` itself writes the token value/time/expiration as separate,
+    non-atomic attribute assignments. Before every tool call was offloaded to
+    its own worker thread (see modules/base.py::_offloaded), only one tool
+    call's body ever executed at a time on the single-threaded event loop, so
+    this was never reachable. Now that tool calls genuinely run concurrently,
+    two calls landing in the same stale-token window can both decide to
+    refresh at once — wasted duplicate token requests, and a narrow window
+    where a third thread reads a token/token_time pair assembled from two
+    different logins.
+
+    Both ``auth_headers`` and ``login()`` are wrapped with the same RLock (not
+    a plain Lock — ``auth_headers`` calls ``self.login()`` internally when the
+    token is stale, and both resolve through this subclass on the same
+    thread, so a non-reentrant lock would deadlock on that call itself).
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._refresh_lock = threading.RLock()
+
+    @property
+    def auth_headers(self):
+        with self._refresh_lock:
+            return super().auth_headers
+
+    def login(self):
+        with self._refresh_lock:
+            return super().login()
 
 
 class FalconClient:
@@ -85,6 +112,7 @@ class FalconClient:
         self._client_secret = resolved["client_secret"]
         self._base_url = resolved["base_url"]
         self._auth: Optional[OAuth2] = None
+        self._auth_init_lock = threading.Lock()
         self._deferred = False
 
     # ------------------------------------------------------------------
@@ -103,6 +131,7 @@ class FalconClient:
         instance._client_secret = None
         instance._base_url = None
         instance._auth = None
+        instance._auth_init_lock = threading.Lock()
         instance._deferred = True
         return instance
 
@@ -114,16 +143,28 @@ class FalconClient:
                 "Cannot access auth_object on a deferred FalconClient. Use BaseModule._get_auth() which resolves from the session ContextVar."
             )
         if self._auth is None:
-            # timeout propagates to every service class built with
-            # auth_object=this, and to the token request itself, so this single
-            # setting bounds every outbound call the server makes.
-            self._auth = OAuth2(
-                client_id=self._client_id,
-                client_secret=self._client_secret,
-                base_url=self._base_url,
-                user_agent=USER_AGENT,
-                timeout=_resolve_http_timeout(),
-            )
+            # Double-checked locking: stdio mode always calls authenticate()
+            # eagerly at startup, before any tool call can run, so _auth is
+            # already set by the time this is reachable concurrently. HTTP mode
+            # constructs a FalconClient per session without authenticating
+            # eagerly (session_auth_middleware), so two of that session's first
+            # requests can race here for the first time now that tool calls run
+            # on real worker threads instead of a single blocked event loop —
+            # both would see _auth is None, both would construct an OAuth2 and
+            # exchange a token, and the loser's assignment would be silently
+            # discarded while a caller may already hold a reference to it.
+            with self._auth_init_lock:
+                if self._auth is None:
+                    # timeout propagates to every service class built with
+                    # auth_object=this, and to the token request itself, so this
+                    # single setting bounds every outbound call the server makes.
+                    self._auth = _ThreadSafeOAuth2(
+                        client_id=self._client_id,
+                        client_secret=self._client_secret,
+                        base_url=self._base_url,
+                        user_agent=USER_AGENT,
+                        timeout=_resolve_http_timeout(),
+                    )
         return self._auth
 
     def authenticate(self) -> bool:
@@ -131,6 +172,15 @@ class FalconClient:
 
         Forces token generation so bad credentials fail fast at startup
         rather than on the first tool call.
+
+        Note this shares FALCON_MCP_HTTP_TIMEOUT with every steady-state tool
+        call, since it goes through the same cached auth_object — a
+        deployment behind a slow-but-working proxy that legitimately needs
+        longer than that to complete its very first token exchange will now
+        fail at startup instead of waiting indefinitely. Accepted tradeoff:
+        the same env var already lets an operator raise the ceiling, and an
+        unbounded startup wait is exactly the class of hang this timeout
+        exists to prevent everywhere else.
 
         Returns:
             True if authentication succeeded.

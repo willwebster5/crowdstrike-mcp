@@ -4,6 +4,7 @@ Credential loading, response formatting, composite ID parsing, and input sanitiz
 """
 
 import json
+import math
 import os
 import re
 import sys
@@ -18,6 +19,46 @@ LARGE_RESPONSE_THRESHOLD = int(os.environ.get("MCP_LARGE_RESPONSE_THRESHOLD", "2
 
 # Control character pattern (everything except printable ASCII + common whitespace)
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def resolve_env_number(
+    name: str,
+    default: float,
+    *,
+    min_value: Optional[float] = None,
+    exclusive_min: bool = False,
+    log_prefix: str = "",
+) -> float:
+    """Resolve a numeric env var, falling back to *default* on anything unusable.
+
+    Unset, unparseable, non-finite (NaN/Inf), or out of the ``min_value`` bound
+    all degrade to *default* rather than raising or silently passing through a
+    value a caller would misread as "unbounded" — a falsy/zero/negative
+    timeout, for instance, is read by some libraries as "no timeout at all".
+    ``exclusive_min=True`` rejects a value equal to ``min_value`` too (e.g.
+    ``min_value=0, exclusive_min=True`` requires strictly positive). A warning
+    is printed to stderr whenever a set-but-unusable value is discarded, so a
+    typo in the environment doesn't fail silently.
+
+    This is the one place this parse-with-fallback logic lives; previously it
+    was reimplemented independently at each call site with inconsistent
+    fallback behavior — one copy had no fallback at all and let a malformed
+    value raise into the caller instead of degrading to the default.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"{log_prefix}Ignoring {name}={raw!r} (not a number); using {default}", file=sys.stderr)
+        return default
+    out_of_bounds = min_value is not None and (value <= min_value if exclusive_min else value < min_value)
+    if not math.isfinite(value) or out_of_bounds:
+        bound = f"{'>' if exclusive_min else '>='} {min_value}" if min_value is not None else "finite"
+        print(f"{log_prefix}Ignoring {name}={raw!r} (must be {bound}); using {default}", file=sys.stderr)
+        return default
+    return value
 
 
 def sanitize_input(value: str, max_length: int = 255) -> str:
